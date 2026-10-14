@@ -3,6 +3,7 @@ package com.example.gamelens
 import ai.onnxruntime.OnnxJavaType
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtLoggingLevel
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
 import android.system.Os
@@ -34,11 +35,22 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
         // Lets the Hexagon DSP find its skel libraries, which the AAR extracts into the native lib dir.
         Os.setenv("ADSP_LIBRARY_PATH", "$nativeLibDir;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/system/lib/rfsa/adsp", true)
 
-        fun open(strict: Boolean): Pair<OrtSession, OrtSession.SessionOptions> {
+        // mode 0 = QNN/HTP only, 1 = QNN/HTP + CPU fallback, 2 = plain CPU (last resort, far too slow for real time)
+        fun open(mode: Int): Pair<OrtSession, OrtSession.SessionOptions> {
             val o = OrtSession.SessionOptions()
             try {
-                o.addQnn(mapOf("backend_path" to "libQnnHtp.so", "htp_performance_mode" to "burst"))
-                if (strict) o.addConfigEntry("session.disable_cpu_ep_fallback", "1")
+                // INFO makes QNN EP log WHY it rejects each node (logcat tag "onnxruntime").
+                o.setSessionLogLevel(OrtLoggingLevel.ORT_LOGGING_LEVEL_INFO)
+                if (mode < 2) {
+                    o.addQnn(
+                        mapOf(
+                            "backend_path" to "libQnnHtp.so",
+                            "htp_performance_mode" to "burst",
+                            "enable_htp_fp16_precision" to "1", // float32 model runs as fp16 on the HTP
+                        )
+                    )
+                    if (mode == 0) o.addConfigEntry("session.disable_cpu_ep_fallback", "1")
+                }
                 return env.createSession(modelPath, o) to o
             } catch (t: Throwable) {
                 o.close()
@@ -47,15 +59,24 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
         }
 
         var n = ""
-        val pair = try {
-            n = "NPU, no CPU fallback"
-            open(true)
-        } catch (t: Throwable) {
-            n = "NPU with CPU fallback (strict failed: ${t.message?.take(100)})"
-            open(false)
+        val errs = ArrayList<String>()
+        var pair: Pair<OrtSession, OrtSession.SessionOptions>? = null
+        for (mode in 0..2) {
+            try {
+                pair = open(mode)
+                n = when (mode) {
+                    0 -> "NPU, no CPU fallback"
+                    1 -> "NPU with CPU fallback (strict failed: ${errs.joinToString()})"
+                    else -> "CPU ONLY - NPU failed: ${errs.joinToString()}"
+                }
+                break
+            } catch (t: Throwable) {
+                errs += "m$mode: ${t.message?.take(160)}"
+            }
         }
-        session = pair.first
-        opts = pair.second
+        if (pair == null) throw IllegalStateException(errs.joinToString(" | "))
+        session = pair!!.first
+        opts = pair!!.second
         note = n
 
         inName = session.inputNames.first()
