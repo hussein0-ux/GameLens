@@ -63,7 +63,6 @@ class CaptureService : Service() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
-        AiSettings.nativeLibDir = applicationInfo.nativeLibraryDir
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

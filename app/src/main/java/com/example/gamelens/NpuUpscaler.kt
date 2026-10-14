@@ -33,7 +33,14 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
 
     init {
         // Lets the Hexagon DSP find its skel libraries, which the AAR extracts into the native lib dir.
-        Os.setenv("ADSP_LIBRARY_PATH", "$nativeLibDir;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/system/lib/rfsa/adsp", true)
+        // Os.setenv can throw ErrnoException on some ROMs; env is best-effort.
+        runCatching {
+            Os.setenv(
+                "ADSP_LIBRARY_PATH",
+                "$nativeLibDir;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/system/lib/rfsa/adsp",
+                true
+            )
+        }
 
         // mode 0 = QNN/HTP only, 1 = QNN/HTP + CPU fallback, 2 = plain CPU (last resort, far too slow for real time)
         fun open(mode: Int): Pair<OrtSession, OrtSession.SessionOptions> {

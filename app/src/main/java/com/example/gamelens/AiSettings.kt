@@ -8,7 +8,7 @@ object AiSettings {
     @Volatile var cols = 4
     @Volatile var rows = 2
     /** 0 = AI only, 1 = split (AI left, plain bilinear right), 2 = bilinear only. */
-    @Volatile var viewMode = 1
+    @Volatile var viewMode = 0
     /** Bumped by the UI to make the pipeline retry after a failure. */
     @Volatile var generation = 0
     @Volatile var nativeLibDir = ""

@@ -95,13 +95,13 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         check(GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) == GLES30.GL_FRAMEBUFFER_COMPLETE) { "FBO incomplete" }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
 
-        // Atlas of float output tiles. Nearest filtering is required for texelFetch on float textures.
+        // Atlas of float output tiles. Adreno drivers want RGBA32F for color-renderable float.
         GLES30.glGenTextures(1, t, 0); atlas = t[0]
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, atlas)
         if (up.planarOut) {
             GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R32F, fullW, atlasH, 0, GLES30.GL_RED, GLES30.GL_FLOAT, null)
         } else {
-            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGB32F, fullW, atlasH, 0, GLES30.GL_RGB, GLES30.GL_FLOAT, null)
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA32F, fullW, atlasH, 0, GLES30.GL_RGBA, GLES30.GL_FLOAT, null)
         }
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
@@ -255,34 +255,50 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
     }
 
     private fun upload(out: FloatBuffer, tx: Int, ty: Int) {
-        var fb = out
-        if (!fb.isDirect || fb.order() != ByteOrder.nativeOrder()) {
-            // GL needs a native-order direct buffer; copy if the runtime gave us anything else.
-            val need = out.capacity()
-            var s = scratch
-            if (s == null || s.capacity() < need) {
-                s = ByteBuffer.allocateDirect(need * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-                scratch = s
-            }
-            s!!.clear()
-            out.rewind()
-            s.put(out)
-            s.rewind()
-            fb = s
-        } else {
-            fb.rewind()
-        }
         if (up.planarOut) {
+            // Planar R32F: three channels stacked vertically. Fast path, no conversion.
+            var fb = out
+            if (!fb.isDirect || fb.order() != ByteOrder.nativeOrder()) {
+                val need = out.capacity()
+                var s = scratch
+                if (s == null || s.capacity() < need) {
+                    s = ByteBuffer.allocateDirect(need * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+                    scratch = s
+                }
+                s!!.clear()
+                out.rewind()
+                s.put(out)
+                s.rewind()
+                fb = s
+            } else {
+                fb.rewind()
+            }
             GLES30.glTexSubImage2D(
                 GLES30.GL_TEXTURE_2D, 0, tx * up.outW, ty * up.outH * 3, up.outW, up.outH * 3,
                 GLES30.GL_RED, GLES30.GL_FLOAT, fb,
             )
-        } else {
-            GLES30.glTexSubImage2D(
-                GLES30.GL_TEXTURE_2D, 0, tx * up.outW, ty * up.outH, up.outW, up.outH,
-                GLES30.GL_RGB, GLES30.GL_FLOAT, fb,
-            )
+            return
         }
+        // Interleaved RGB model output -> RGBA. Adreno refuses RGB32F color textures, so expand.
+        val px = up.outW * up.outH
+        val need = px * 4
+        var s = scratch
+        if (s == null || s.capacity() < need) {
+            s = ByteBuffer.allocateDirect(need * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            scratch = s
+        }
+        s!!.clear()
+        out.rewind()
+        var i = 0
+        while (i < px) {
+            s.put(out.get()); s.put(out.get()); s.put(out.get()); s.put(1f)
+            i++
+        }
+        s.rewind()
+        GLES30.glTexSubImage2D(
+            GLES30.GL_TEXTURE_2D, 0, tx * up.outW, ty * up.outH, up.outW, up.outH,
+            GLES30.GL_RGBA, GLES30.GL_FLOAT, s,
+        )
     }
 
     companion object {

@@ -11,26 +11,18 @@ object LookSettings {
     @Volatile var grade = 0.20f       // 0..1    teal shadows / warm orange highlights
     @Volatile var vibrance = 0.45f    // 0..1    boosts muted colours more than vivid ones
     @Volatile var glow = 0.20f        // 0..1    bloom around bright areas
-    @Volatile var vignette = 0f       // 0..1    darkened screen corners
-    @Volatile var chroma = 0f         // 0..1    chromatic aberration toward the edges
-    @Volatile var motion = 0f         // 0..0.6  frame-blend motion blur (blends in the previous frame)
 
     class Preset(
         val sharpen: Float, val clarity: Float, val contrast: Float, val saturation: Float,
         val filmic: Float, val exposure: Float, val grade: Float, val vibrance: Float, val glow: Float,
-        val vignette: Float = 0f, val chroma: Float = 0f, val motion: Float = 0f,
     )
 
     val NATURAL = Preset(0.50f, 0.25f, 1.03f, 1.05f, 0.20f, 1.05f, 0.10f, 0.20f, 0.10f)
     val VIVID = Preset(0.65f, 0.40f, 1.08f, 1.20f, 0.30f, 1.08f, 0.20f, 0.45f, 0.20f)
     val CINEMATIC = Preset(0.60f, 0.45f, 1.12f, 1.10f, 0.45f, 1.10f, 0.60f, 0.35f, 0.35f)
 
-    /** Edit-style look: heavy teal/orange grade, strong bloom, crisp edges, vignette, fringing, motion blur. */
-    val MONTAGE = Preset(0.85f, 0.55f, 1.15f, 1.30f, 0.40f, 1.08f, 0.85f, 0.55f, 0.75f, 0.35f, 0.25f, 0.30f)
-
     fun apply(p: Preset) {
         sharpen = p.sharpen; clarity = p.clarity; contrast = p.contrast; saturation = p.saturation
         filmic = p.filmic; exposure = p.exposure; grade = p.grade; vibrance = p.vibrance; glow = p.glow
-        vignette = p.vignette; chroma = p.chroma; motion = p.motion
     }
 }
