@@ -109,6 +109,7 @@ class MainActivity : ComponentActivity() {
         presetButton("Natural", LookSettings.NATURAL)
         presetButton("Vivid", LookSettings.VIVID)
         presetButton("Cinematic", LookSettings.CINEMATIC)
+        presetButton("Montage", LookSettings.MONTAGE)
         root.addView(presets)
 
         slider(root, "Sharpen", 0f, 1f, { LookSettings.sharpen }) { LookSettings.sharpen = it }
@@ -120,6 +121,9 @@ class MainActivity : ComponentActivity() {
         slider(root, "Tone curve", 0f, 1f, { LookSettings.filmic }) { LookSettings.filmic = it }
         slider(root, "Teal/orange grade", 0f, 1f, { LookSettings.grade }) { LookSettings.grade = it }
         slider(root, "Glow", 0f, 1f, { LookSettings.glow }) { LookSettings.glow = it }
+        slider(root, "Vignette", 0f, 1f, { LookSettings.vignette }) { LookSettings.vignette = it }
+        slider(root, "Chromatic fringe", 0f, 1f, { LookSettings.chroma }) { LookSettings.chroma = it }
+        slider(root, "Motion blur", 0f, 0.6f, { LookSettings.motion }) { LookSettings.motion = it }
 
         setContentView(ScrollView(this).apply { addView(root) })
     }

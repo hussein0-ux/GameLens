@@ -48,6 +48,23 @@ class GlPipeline(
     private var uGrade = 0
     private var uVibrance = 0
     private var uGlow = 0
+    private var uPrev = 0
+    private var uRes = 0
+    private var uHasPrev = 0
+    private var uMotion = 0
+    private var uVig = 0
+    private var uChroma = 0
+
+    // Motion blur: ping-pong framebuffers hold the previous output frame.
+    private var blitProgram = 0
+    private var bTex = 0
+    private var bRes = 0
+    private val fbo = IntArray(1)
+    private val fboTex = IntArray(2)
+    private var fboW = 0
+    private var fboH = 0
+    private var cur = 0
+    private var hasPrev = false
 
     lateinit var surfaceTexture: SurfaceTexture
         private set
@@ -103,6 +120,7 @@ class GlPipeline(
             runCatching { captureSurface.release() }
             runCatching { surfaceTexture.release() }
             if (program != 0) GLES30.glDeleteProgram(program)
+            if (blitProgram != 0) GLES30.glDeleteProgram(blitProgram)
             runCatching { ai?.release() }
             runCatching { upscaler?.close() }
             ai = null
@@ -170,6 +188,32 @@ class GlPipeline(
         uGrade = GLES30.glGetUniformLocation(program, "uGrade")
         uVibrance = GLES30.glGetUniformLocation(program, "uVibrance")
         uGlow = GLES30.glGetUniformLocation(program, "uGlow")
+        uPrev = GLES30.glGetUniformLocation(program, "uPrev")
+        uRes = GLES30.glGetUniformLocation(program, "uRes")
+        uHasPrev = GLES30.glGetUniformLocation(program, "uHasPrev")
+        uMotion = GLES30.glGetUniformLocation(program, "uMotion")
+        uVig = GLES30.glGetUniformLocation(program, "uVig")
+        uChroma = GLES30.glGetUniformLocation(program, "uChroma")
+
+        blitProgram = buildProgram(BLIT_VERTEX_SRC, BLIT_FRAGMENT_SRC)
+        bTex = GLES30.glGetUniformLocation(blitProgram, "uTex2")
+        bRes = GLES30.glGetUniformLocation(blitProgram, "uRes")
+    }
+
+    private fun ensureFbo(w: Int, h: Int) {
+        if (fboW == w && fboH == h && fboTex[0] != 0) return
+        if (fboTex[0] != 0) GLES30.glDeleteTextures(2, fboTex, 0)
+        if (fbo[0] == 0) GLES30.glGenFramebuffers(1, fbo, 0)
+        GLES30.glGenTextures(2, fboTex, 0)
+        for (i in 0..1) {
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTex[i])
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, w, h, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+            GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        }
+        fboW = w; fboH = h; cur = 0; hasPrev = false
     }
 
     private fun drawFrame() {
@@ -185,11 +229,29 @@ class GlPipeline(
 
         if (AiSettings.enabled && tryDrawAi(outW, outH)) return
 
+        val useMotion = LookSettings.motion > 0.01f
+        if (useMotion) {
+            ensureFbo(outW, outH)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fbo[0])
+            GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, fboTex[cur], 0)
+        } else {
+            hasPrev = false
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        }
         GLES30.glViewport(0, 0, outW, outH)
 
         GLES30.glUseProgram(program)
+        // Unit 1 always holds a 2D texture for uPrev (the previous output frame while motion blur is on).
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, if (fboTex[0] != 0) fboTex[1 - cur] else 0)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex)
+        GLES30.glUniform1i(uPrev, 1)
+        GLES30.glUniform2f(uRes, outW.toFloat(), outH.toFloat())
+        GLES30.glUniform1f(uHasPrev, if (useMotion && hasPrev) 1f else 0f)
+        GLES30.glUniform1f(uMotion, if (useMotion) LookSettings.motion else 0f)
+        GLES30.glUniform1f(uVig, LookSettings.vignette)
+        GLES30.glUniform1f(uChroma, LookSettings.chroma)
 
         GLES30.glUniformMatrix4fv(uMatrix, 1, false, stMatrix, 0)
         GLES30.glUniform2f(uTexel, 1f / width, 1f / height)
@@ -211,6 +273,20 @@ class GlPipeline(
         GLES30.glEnableVertexAttribArray(1)
 
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+
+        if (useMotion) {
+            // Copy the finished frame to the screen; it also becomes "previous" for the next frame.
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glViewport(0, 0, outW, outH)
+            GLES30.glUseProgram(blitProgram)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, fboTex[cur])
+            GLES30.glUniform1i(bTex, 0)
+            GLES30.glUniform2f(bRes, outW.toFloat(), outH.toFloat())
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+            cur = 1 - cur
+            hasPrev = true
+        }
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
     }
 
@@ -300,6 +376,19 @@ void main() {
 
         // Single pass: CAS-style adaptive sharpening -> clarity (wide unsharp) -> filmic curve,
         // contrast, saturation. All tunable live from the app UI.
+        private const val BLIT_VERTEX_SRC = """#version 300 es
+layout(location = 0) in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
+"""
+
+        private const val BLIT_FRAGMENT_SRC = """#version 300 es
+precision highp float;
+uniform sampler2D uTex2;
+uniform vec2 uRes;
+out vec4 outColor;
+void main() { outColor = vec4(texture(uTex2, gl_FragCoord.xy / uRes).rgb, 1.0); }
+"""
+
         private const val FRAGMENT_SRC = """#version 300 es
 #extension GL_OES_EGL_image_external_essl3 : require
 precision highp float;
@@ -315,6 +404,12 @@ uniform float uExposure;
 uniform float uGrade;
 uniform float uVibrance;
 uniform float uGlow;
+uniform sampler2D uPrev;
+uniform vec2 uRes;
+uniform float uHasPrev;
+uniform float uMotion;
+uniform float uVig;
+uniform float uChroma;
 
 const vec2 DIRS[8] = vec2[8](
     vec2(1.0, 0.0), vec2(0.7071, 0.7071), vec2(0.0, 1.0), vec2(-0.7071, 0.7071),
@@ -333,7 +428,10 @@ vec3 aces(vec3 x) {
 }
 
 void main() {
-    vec3 e = tap(vec2(0.0));
+    vec2 suv = gl_FragCoord.xy / uRes;
+    // Chromatic fringe: red and blue are sampled slightly apart, more toward the screen edges.
+    vec2 cd = (suv - 0.5) * uChroma * 8.0;
+    vec3 e = vec3(tap(cd).r, tap(vec2(0.0)).g, tap(-cd).b);
     vec3 n = tap(vec2(0.0, -1.0));
     vec3 s = tap(vec2(0.0,  1.0));
     vec3 w = tap(vec2(-1.0, 0.0));
@@ -361,6 +459,15 @@ void main() {
         glowAcc += max(gs - 0.55, 0.0);
     }
     col += (glowAcc / 8.0) * (uGlow * 1.5);
+    // Strong glow settings add a second, wider ring so the bloom spreads like an edit's glow effect.
+    float wideW = smoothstep(0.4, 1.0, uGlow);
+    if (wideW > 0.0) {
+        vec3 wideAcc = vec3(0.0);
+        for (int i = 0; i < 8; i++) {
+            wideAcc += max(tap(DIRS[i] * 24.0) - 0.6, vec3(0.0));
+        }
+        col += (wideAcc / 8.0) * (wideW * 1.2);
+    }
 
     // Exposure + gentle S-curve: keeps midtones where they were, adds punch.
     col *= uExposure;
@@ -381,7 +488,10 @@ void main() {
     col = mix(vec3(luma(col)), col, 1.0 + uVibrance * (1.0 - satNow));
     col = mix(vec3(luma(col)), col, uSat);
 
-    outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+    col *= 1.0 - uVig * smoothstep(0.30, 0.80, length(suv - 0.5));
+    col = clamp(col, 0.0, 1.0);
+    if (uMotion > 0.0 && uHasPrev > 0.5) col = mix(col, texture(uPrev, suv).rgb, uMotion);
+    outColor = vec4(col, 1.0);
 }
 """
     }

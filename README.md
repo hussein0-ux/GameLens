@@ -14,6 +14,13 @@ Presets in the app: **Natural**, **Vivid** (default) and **Cinematic**. Sliders 
 exposure, contrast, saturation, vibrance, tone curve, teal/orange grade and glow. Exposure and the
 gentler tone curve fix the dim look of v0.2.
 
+## Montage preset (v0.5)
+
+A fourth preset, **Montage**, aims at the look of edited gameplay clips: heavy teal/orange grade, strong two-ring
+bloom, crisp sharpening, vignette, chromatic fringe and frame-blend motion blur. New sliders: **Vignette**,
+**Chromatic fringe**, **Motion blur** (blends the previous output frame in; 0 disables the extra framebuffer pass).
+Speed ramps, zoom punches and cuts are editing effects and are not possible in a live overlay.
+
 ## How it works
 
 ```
