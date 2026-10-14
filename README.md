@@ -8,6 +8,12 @@ screen-space post-process: adaptive sharpening, clarity (micro-contrast), a film
 contrast and saturation. It can make footage look crisper and punchier, but it cannot invent
 new lighting or materials.
 
+## Looks (v0.3)
+
+Presets in the app: **Natural**, **Vivid** (default) and **Cinematic**. Sliders cover sharpen, clarity,
+exposure, contrast, saturation, vibrance, tone curve, teal/orange grade and glow. Exposure and the
+gentler tone curve fix the dim look of v0.2.
+
 ## How it works
 
 ```

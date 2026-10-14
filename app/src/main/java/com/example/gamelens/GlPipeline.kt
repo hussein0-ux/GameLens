@@ -43,6 +43,10 @@ class GlPipeline(
     private var uContrast = 0
     private var uSat = 0
     private var uFilmic = 0
+    private var uExposure = 0
+    private var uGrade = 0
+    private var uVibrance = 0
+    private var uGlow = 0
 
     lateinit var surfaceTexture: SurfaceTexture
         private set
@@ -149,6 +153,10 @@ class GlPipeline(
         uContrast = GLES30.glGetUniformLocation(program, "uContrast")
         uSat = GLES30.glGetUniformLocation(program, "uSat")
         uFilmic = GLES30.glGetUniformLocation(program, "uFilmic")
+        uExposure = GLES30.glGetUniformLocation(program, "uExposure")
+        uGrade = GLES30.glGetUniformLocation(program, "uGrade")
+        uVibrance = GLES30.glGetUniformLocation(program, "uVibrance")
+        uGlow = GLES30.glGetUniformLocation(program, "uGlow")
     }
 
     private fun drawFrame() {
@@ -174,6 +182,10 @@ class GlPipeline(
         GLES30.glUniform1f(uContrast, LookSettings.contrast)
         GLES30.glUniform1f(uSat, LookSettings.saturation)
         GLES30.glUniform1f(uFilmic, LookSettings.filmic)
+        GLES30.glUniform1f(uExposure, LookSettings.exposure)
+        GLES30.glUniform1f(uGrade, LookSettings.grade)
+        GLES30.glUniform1f(uVibrance, LookSettings.vibrance)
+        GLES30.glUniform1f(uGlow, LookSettings.glow)
 
         quad.position(0)
         GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 16, quad)
@@ -231,6 +243,15 @@ uniform float uClarity;
 uniform float uContrast;
 uniform float uSat;
 uniform float uFilmic;
+uniform float uExposure;
+uniform float uGrade;
+uniform float uVibrance;
+uniform float uGlow;
+
+const vec2 DIRS[8] = vec2[8](
+    vec2(1.0, 0.0), vec2(0.7071, 0.7071), vec2(0.0, 1.0), vec2(-0.7071, 0.7071),
+    vec2(-1.0, 0.0), vec2(-0.7071, -0.7071), vec2(0.0, -1.0), vec2(0.7071, -0.7071)
+);
 
 in vec2 vUv;
 out vec4 outColor;
@@ -265,11 +286,32 @@ void main() {
     col += (col - blur) * uClarity * (0.5 + 0.5 * midMask);
     col = clamp(col, 0.0, 1.0);
 
-    // Filmic curve blend, then contrast and saturation.
-    col = mix(col, aces(col * 1.1), uFilmic);
+    // Glow: bleed bright areas outward (8 taps) for a soft HDR-style bloom.
+    vec3 glowAcc = vec3(0.0);
+    for (int i = 0; i < 8; i++) {
+        vec3 gs = tap(DIRS[i] * 9.0);
+        glowAcc += max(gs - 0.55, 0.0);
+    }
+    col += (glowAcc / 8.0) * (uGlow * 1.5);
+
+    // Exposure + gentle S-curve: keeps midtones where they were, adds punch.
+    col *= uExposure;
+    vec3 curved = clamp(col * col * (3.0 - 2.0 * col), 0.0, 1.0);
+    col = mix(clamp(col, 0.0, 1.0), curved, uFilmic);
     col = (col - 0.5) * uContrast + 0.5;
-    float l = luma(col);
-    col = mix(vec3(l), col, uSat);
+
+    // Split-tone grade: cool teal in the shadows, warm orange in the highlights.
+    float l0 = luma(col);
+    float shadowsW = 1.0 - smoothstep(0.0, 0.55, l0);
+    float highsW = smoothstep(0.45, 1.0, l0);
+    col += uGrade * (vec3(-0.03, 0.03, 0.08) * shadowsW + vec3(0.08, 0.03, -0.05) * highsW);
+
+    // Vibrance (lifts muted colours more than already-vivid ones), then saturation.
+    float chromaMax = max(col.r, max(col.g, col.b));
+    float chromaMin = min(col.r, min(col.g, col.b));
+    float satNow = chromaMax - chromaMin;
+    col = mix(vec3(luma(col)), col, 1.0 + uVibrance * (1.0 - satNow));
+    col = mix(vec3(luma(col)), col, uSat);
 
     outColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }

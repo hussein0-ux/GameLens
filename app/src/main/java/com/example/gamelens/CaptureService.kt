@@ -119,7 +119,7 @@ class CaptureService : Service() {
             gravity = Gravity.TOP or Gravity.START
             // Android blocks touches that pass through an untrusted overlay whose window alpha is
             // above ~0.8 (the "maximum obscuring opacity"). Stay just under it so taps reach the game.
-            alpha = OVERLAY_ALPHA
+            alpha = if (a11y != null) 1f else OVERLAY_ALPHA
             layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
