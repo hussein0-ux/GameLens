@@ -110,6 +110,9 @@ class CaptureService : Service() {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
+            // Android blocks touches that pass through an untrusted overlay whose window alpha is
+            // above ~0.8 (the "maximum obscuring opacity"). Stay just under it so taps reach the game.
+            alpha = OVERLAY_ALPHA
             layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
@@ -197,6 +200,7 @@ class CaptureService : Service() {
         const val EXTRA_RESULT_CODE = "resultCode"
         const val EXTRA_DATA = "data"
         private const val CHANNEL_ID = "gamelens"
+        private const val OVERLAY_ALPHA = 0.79f
 
         @Volatile var running = false
 
