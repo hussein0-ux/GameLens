@@ -22,7 +22,11 @@ Everything stays on the GPU, so there are no CPU frame copies.
 
 1. Install Android Studio and open the `GameLens` folder. Let Gradle sync (it will create the wrapper).
 2. Enable Developer options and USB debugging on the S24 Ultra, plug it in, press Run.
-3. In the app: press **Start**, grant "Display over other apps", press **Start** again.
+3. In the app: press **Start**. The first time, Android opens Accessibility settings: turn on
+   **GameLens overlay** (under Installed apps). If it is greyed out, open App info for GameLens,
+   tap the ⋮ menu and choose **Allow restricted settings**, then try again. Press **Start** again.
+   The accessibility service does nothing except let the overlay be a trusted window, so taps pass
+   through to the game instead of being blocked.
 4. When Android asks what to share, choose **A single app** and select your game.
 5. Switch to the game. To change the look, switch back to GameLens and move the sliders; changes
    apply live. Use the notification's **Stop** button to end.

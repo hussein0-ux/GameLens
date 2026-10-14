@@ -45,6 +45,10 @@ class MainActivity : ComponentActivity() {
             textSize = 26f
         })
         root.addView(TextView(this).apply {
+            text = "Build 0.2 - trusted accessibility overlay"
+            textSize = 12f
+        })
+        root.addView(TextView(this).apply {
             text = "Real-time sharpening, clarity and filmic grading for your game.\n" +
                 "When Android asks what to share, choose \"A single app\" and pick your game."
         })
@@ -68,11 +72,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun start() {
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Allow \"Display over other apps\", then press Start again", Toast.LENGTH_LONG).show()
-            startActivity(
-                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
-            )
+        if (GameLensAccessibilityService.instance == null) {
+            Toast.makeText(
+                this,
+                "Turn on \"GameLens overlay\" under Installed apps, then press Start again. " +
+                    "If it is greyed out: App info > ⋮ > Allow restricted settings.",
+                Toast.LENGTH_LONG,
+            ).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
         val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager

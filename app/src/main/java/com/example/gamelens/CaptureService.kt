@@ -42,6 +42,7 @@ class CaptureService : Service() {
     private var virtualDisplay: VirtualDisplay? = null
     private var pipeline: GlPipeline? = null
     private var overlay: SurfaceView? = null
+    private var overlayWm: WindowManager? = null
     private var dpi = 420
 
     private val displayListener = object : DisplayManager.DisplayListener {
@@ -96,13 +97,19 @@ class CaptureService : Service() {
     }
 
     private fun addOverlay() {
-        val view = SurfaceView(this)
+        // Prefer the trusted accessibility overlay (touches pass through to the game). Fall back to a
+        // normal "draw over other apps" overlay only if the accessibility service isn't running.
+        val a11y = GameLensAccessibilityService.instance
+        val wm = (a11y?.getSystemService(WINDOW_SERVICE) as? WindowManager) ?: windowManager
+        val view = SurfaceView(a11y ?: this)
         overlay = view
+        overlayWm = wm
 
         val lp = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            if (a11y != null) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            else WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
@@ -129,7 +136,7 @@ class CaptureService : Service() {
             }
         })
 
-        windowManager.addView(view, lp)
+        wm.addView(view, lp)
     }
 
     private fun startPipeline(holder: SurfaceHolder) {
@@ -187,8 +194,9 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         stopPipeline()
-        overlay?.let { runCatching { windowManager.removeView(it) } }
+        overlay?.let { runCatching { (overlayWm ?: windowManager).removeView(it) } }
         overlay = null
+        overlayWm = null
         projection?.stop()
         projection = null
         running = false
