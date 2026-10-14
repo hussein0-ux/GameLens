@@ -226,6 +226,18 @@ class MainActivity : ComponentActivity() {
                 onnx = File(dir, name).also { it.writeBytes(bytes) }
             }
             val f = onnx ?: throw IllegalStateException("No .onnx file found in $name")
+            // Models with external weights reference a sidecar file (e.g. "model.data") by name inside the .onnx.
+            // If it is missing, QNN rejects every Conv with a confusing NHWC error, so fail early with a clear message.
+            val text = String(f.readBytes(), Charsets.ISO_8859_1)
+            val missing = Regex("[A-Za-z0-9_.\\-]+\\.(data|bin|weights)").findAll(text)
+                .map { it.value }.distinct().filter { !File(dir, it).exists() }.toList()
+            if (missing.isNotEmpty()) {
+                f.delete()
+                throw IllegalStateException(
+                    "Model needs external weights file(s) ${missing.joinToString()} that were not provided. " +
+                        "Pick the .zip containing them, or use the single-file (inline) .onnx."
+                )
+            }
             AiSettings.modelPath = f.path
             AiSettings.generation++
             getSharedPreferences("ai", MODE_PRIVATE).edit().putString("model", f.path).apply()
