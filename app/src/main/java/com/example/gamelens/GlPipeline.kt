@@ -10,6 +10,7 @@ import android.opengl.GLES11Ext
 import android.opengl.GLES30
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Log
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -68,6 +69,14 @@ class GlPipeline(
 
     @Volatile private var released = false
 
+    // Experimental AI upscaler (all of this lives on the GL thread).
+    private var upscaler: NpuUpscaler? = null
+    private var upscalerPath: String? = null
+    private var ai: AiPass? = null
+    private var aiFailedPath: String? = null
+    private var aiGeneration = 0
+    private var lastFrameTs = 0L
+
     /** Blocks briefly until the GL thread has built the context and the capture surface exists. */
     fun start() {
         val latch = CountDownLatch(1)
@@ -94,6 +103,10 @@ class GlPipeline(
             runCatching { captureSurface.release() }
             runCatching { surfaceTexture.release() }
             if (program != 0) GLES30.glDeleteProgram(program)
+            runCatching { ai?.release() }
+            runCatching { upscaler?.close() }
+            ai = null
+            upscaler = null
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
                 EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
                 if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglSurface)
@@ -169,6 +182,9 @@ class GlPipeline(
         val outW = sz[0]
         EGL14.eglQuerySurface(eglDisplay, eglSurface, EGL14.EGL_HEIGHT, sz, 0)
         val outH = sz[0]
+
+        if (AiSettings.enabled && tryDrawAi(outW, outH)) return
+
         GLES30.glViewport(0, 0, outW, outH)
 
         GLES30.glUseProgram(program)
@@ -198,6 +214,57 @@ class GlPipeline(
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
     }
 
+    /**
+     * Experimental path: downscale -> NPU 4x upscale per tile -> present. Returns true if it handled
+     * the frame (including "nothing new to draw"); false means the normal look pipeline should run.
+     */
+    private fun tryDrawAi(outW: Int, outH: Int): Boolean {
+        val path = AiSettings.modelPath
+        if (path == null) {
+            AiSettings.status = "AI: pick an ONNX model in the app first"
+            return false
+        }
+        if (aiGeneration != AiSettings.generation) {
+            aiGeneration = AiSettings.generation
+            aiFailedPath = null
+        }
+        if (path == aiFailedPath) return false
+        try {
+            if (upscaler == null || upscalerPath != path) {
+                ai?.release(); ai = null
+                upscaler?.close(); upscaler = null
+                AiSettings.status = "AI: loading model on the NPU..."
+                val up = NpuUpscaler(path, AiSettings.nativeLibDir)
+                upscaler = up
+                upscalerPath = path
+                AiSettings.status = "AI running: " + up.describe()
+                Log.i(TAG, AiSettings.status)
+            }
+            val up = upscaler!!
+            val c = AiSettings.cols
+            val r = AiSettings.rows
+            var pass = ai
+            if (pass == null || pass.cols != c || pass.rows != r) {
+                pass?.release()
+                pass = AiPass(up, c, r).also { it.init() }
+                ai = pass
+            }
+            val ts = surfaceTexture.timestamp
+            if (ts == lastFrameTs) return true // no new captured frame since last time
+            lastFrameTs = ts
+            pass.render(oesTex, stMatrix, quad, outW, outH)
+            EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+            return true
+        } catch (t: Throwable) {
+            aiFailedPath = path
+            ai?.let { runCatching { it.release() } }
+            ai = null
+            AiSettings.status = "AI failed, using normal filter: ${t.javaClass.simpleName}: ${t.message}"
+            Log.e(TAG, "AI path failed", t)
+            return false
+        }
+    }
+
     private fun buildProgram(vs: String, fs: String): Int {
         fun compile(type: Int, src: String): Int {
             val s = GLES30.glCreateShader(type)
@@ -219,6 +286,7 @@ class GlPipeline(
     }
 
     companion object {
+        private const val TAG = "GameLensAI"
         private const val VERTEX_SRC = """#version 300 es
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aUv;

@@ -15,6 +15,9 @@
         android:label="GameLens"
         android:theme="@android:style/Theme.DeviceDefault.DayNight">
 
+        <!-- Lets the AI upscaler reach the Hexagon NPU through the vendor FastRPC library. -->
+        <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true">

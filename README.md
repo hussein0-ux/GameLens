@@ -43,6 +43,22 @@ In whole-screen capture the overlay would be captured back into itself (a feedba
 over-sharpens every frame). Single-app capture only includes the chosen app's window, so the
 overlay stays out of the capture.
 
+## AI upscale prototype (v0.4, experimental)
+
+Runs QuickSRNetSmall (ONNX, 128x128 -> 512x512) on the Snapdragon NPU through ONNX Runtime + QNN.
+Pipeline: capture -> GPU box-filter down to (cols*128 x rows*128) -> read back -> tiles through the NPU
+-> float atlas texture -> draw to overlay. The look filters are bypassed in this mode.
+
+1. Get the QuickSRNetSmall **ONNX** zip from Qualcomm AI Hub / Hugging Face (float I/O, as used by QuickSR Bench).
+2. In the app: pick the model, tick **Enable AI upscale**, choose an input size, press Start.
+3. Open your game. Return to GameLens to read the per-frame timing breakdown.
+4. Use "Split" view to compare AI (left) against plain bilinear of the same small image (right).
+
+Known issues of the prototype: tiles are processed independently, so faint seams at 128 px borders are
+expected; stats are only visible in the app, not over the game; landscape only; the full-resolution
+capture is deliberately shrunk, so this shows pipeline cost and AI-vs-bilinear quality, not a
+real "game rendered at low resolution" gain.
+
 ## Known limitations
 
 - Games that set `FLAG_SECURE` or block capture will show black.
