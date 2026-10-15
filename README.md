@@ -14,19 +14,12 @@ Presets in the app: **Natural**, **Vivid** (default) and **Cinematic**. Sliders 
 exposure, contrast, saturation, vibrance, tone curve, teal/orange grade and glow. Exposure and the
 gentler tone curve fix the dim look of v0.2.
 
-## AI upscaler benchmark (v0.4)
+## Montage preset (v0.5)
 
-The **AI upscaler benchmark** button runs Qualcomm's QuickSRNetSmall (about 33K parameters, from the
-paper https://arxiv.org/abs/2303.04336) on your phone. It reports speed on CPU and GPU, a rough
-full-screen frame-time estimate, and quality against plain bilinear upscaling on a generated test image.
-It does not touch the live GameLens pipeline yet; it exists to tell us whether live use is realistic.
-
-The model is downloaded by the GitHub Actions build and bundled into the APK, so it is not in this repo.
-Its licence is listed as BSD-3-Clause on Qualcomm AI Hub but as "other" (see the aimet-model-zoo licence)
-on Hugging Face, so check the terms before sharing the app with anyone else.
-
-Note: an upscaler only adds detail if the game renders fewer pixels than your screen shows. GameLens
-captures the finished picture, so the benefit would be speed (render lower, upscale) and not extra sharpness.
+A fourth preset, **Montage**, aims at the look of edited gameplay clips: heavy teal/orange grade, strong two-ring
+bloom, crisp sharpening, vignette, chromatic fringe and frame-blend motion blur. New sliders: **Vignette**,
+**Chromatic fringe**, **Motion blur** (blends the previous output frame in; 0 disables the extra framebuffer pass).
+Speed ramps, zoom punches and cuts are editing effects and are not possible in a live overlay.
 
 ## How it works
 
@@ -56,6 +49,22 @@ Everything stays on the GPU, so there are no CPU frame copies.
 In whole-screen capture the overlay would be captured back into itself (a feedback loop that
 over-sharpens every frame). Single-app capture only includes the chosen app's window, so the
 overlay stays out of the capture.
+
+## AI upscale prototype (v0.4, experimental)
+
+Runs QuickSRNetSmall (ONNX, 128x128 -> 512x512) on the Snapdragon NPU through ONNX Runtime + QNN.
+Pipeline: capture -> GPU box-filter down to (cols*128 x rows*128) -> read back -> tiles through the NPU
+-> float atlas texture -> draw to overlay. The look filters are bypassed in this mode.
+
+1. Get the QuickSRNetSmall **ONNX** zip from Qualcomm AI Hub / Hugging Face (float I/O, as used by QuickSR Bench).
+2. In the app: pick the model, tick **Enable AI upscale**, choose an input size, press Start.
+3. Open your game. Return to GameLens to read the per-frame timing breakdown.
+4. Use "Split" view to compare AI (left) against plain bilinear of the same small image (right).
+
+Known issues of the prototype: tiles are processed independently, so faint seams at 128 px borders are
+expected; stats are only visible in the app, not over the game; landscape only; the full-resolution
+capture is deliberately shrunk, so this shows pipeline cost and AI-vs-bilinear quality, not a
+real "game rendered at low resolution" gain.
 
 ## Known limitations
 

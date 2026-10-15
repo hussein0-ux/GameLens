@@ -21,28 +21,6 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # The AI upscaler model (Qualcomm QuickSRNetSmall, BSD-3-Clause) is fetched at build time and
-      # bundled into the APK, so it is never committed to the repo.
-      - name: Download QuickSRNetSmall model
-        run: |
-          set -euo pipefail
-          mkdir -p app/src/main/assets model_dl
-          curl -fsSL "https://huggingface.co/qualcomm/QuickSRNetSmall/resolve/main/release_assets.json" \
-            -o model_dl/release_assets.json
-          URL="$(grep -oE 'https://[^"]*quicksrnetsmall-tflite-float\.zip' model_dl/release_assets.json | head -n1 || true)"
-          if [ -z "$URL" ]; then
-            echo "Could not find the URL in release_assets.json; using the known release path."
-            URL="https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/quicksrnetsmall/releases/v0.64.0/quicksrnetsmall-tflite-float.zip"
-          fi
-          echo "Model URL: $URL"
-          curl -fsSL "$URL" -o model_dl/model.zip
-          unzip -q model_dl/model.zip -d model_dl/extracted
-          echo "Zip contents:"; find model_dl/extracted -type f
-          FILE="$(find model_dl/extracted -name '*.tflite' | head -n1)"
-          test -n "$FILE" || { echo "No .tflite file found in the model zip"; exit 1; }
-          cp "$FILE" app/src/main/assets/quicksrnet_small_float.tflite
-          ls -l app/src/main/assets
-
       # No Gradle wrapper is committed, so install a pinned Gradle version directly.
       - uses: gradle/actions/setup-gradle@v4
         with:

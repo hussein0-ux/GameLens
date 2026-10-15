@@ -13,11 +13,20 @@ android {
         targetSdk = 34
         versionCode = 4
         versionName = "0.4"
+        ndk { abiFilters += "arm64-v8a" }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+        }
+    }
+    packaging {
+        // QNN loads its HTP libraries by name from the app's native library directory,
+        // so they must be extracted to disk instead of read from inside the APK.
+        jniLibs {
+            useLegacyPackaging = true
+            pickFirsts += setOf("**/libc++_shared.so")
         }
     }
     compileOptions {
@@ -32,9 +41,6 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.1")
-
-    // Classic TensorFlow Lite runtime plus the GPU delegate, used by the AI upscaler benchmark.
-    implementation("org.tensorflow:tensorflow-lite:2.16.1")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
-    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.16.1")
+    // Experimental AI upscaler: ONNX Runtime with Qualcomm's QNN provider (Hexagon NPU).
+    implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.24.3")
 }
