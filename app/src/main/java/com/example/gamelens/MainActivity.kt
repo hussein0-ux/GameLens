@@ -218,7 +218,7 @@ class MainActivity : ComponentActivity() {
                     var e = zin.nextEntry
                     while (e != null) {
                         val base = File(e.name).name
-                        if (!e.isDirectory && (base.endsWith(".onnx") || base.endsWith(".data"))) {
+                        if (!e.isDirectory && (base.endsWith(".onnx") || base.endsWith(".data") || base == "metadata.json")) {
                             val f = File(dir, base)
                             f.writeBytes(zin.readBytes())
                             if (base.endsWith(".onnx")) onnx = f

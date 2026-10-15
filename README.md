@@ -56,7 +56,9 @@ Runs QuickSRNetSmall (ONNX, 128x128 -> 512x512) on the Snapdragon NPU through ON
 Pipeline: capture -> GPU box-filter down to (cols*128 x rows*128) -> read back -> tiles through the NPU
 -> float atlas texture -> draw to overlay. The look filters are bypassed in this mode.
 
-1. Get the QuickSRNetSmall **ONNX** zip from Qualcomm AI Hub / Hugging Face (float I/O, as used by QuickSR Bench).
+1. Get a 128x128 -> 512x512 super-resolution **ONNX** zip from Qualcomm AI Hub / Hugging Face. Both float32 I/O (QuickSRNetSmall)
+   and w8a8 uint8 I/O (SESR-M5, Real-ESRGAN-General-x4v3) work. Pick the original .zip: for uint8 models the app reads the
+   quantisation scale/zero point from the `metadata.json` inside it.
 2. In the app: pick the model, tick **Enable AI upscale**, choose an input size, press Start.
 3. Open your game. Return to GameLens to read the per-frame timing breakdown.
 4. Use "Split" view to compare AI (left) against plain bilinear of the same small image (right).

@@ -55,6 +55,9 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
     private var uFull = 0
     private var uPlanar = 0
     private var uMode = 0
+    private var uQuant = 0
+    private var uOutScale = 0
+    private var uOutZero = 0
 
     private val rgbaBuf: ByteBuffer = ByteBuffer.allocateDirect(lowW * lowH * 4).order(ByteOrder.nativeOrder())
     private val rgba = ByteArray(lowW * lowH * 4)
@@ -62,6 +65,13 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
     private val tileIn: FloatBuffer =
         ByteBuffer.allocateDirect(tileFloats.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
     private var scratch: FloatBuffer? = null
+
+    // uint8 (w8a8) models: raw pixel bytes in, quantised bytes out. Dequantised in the present shader.
+    private val q = up.quantized
+    private val tileBytes = ByteArray(if (q) 3 * up.inW * up.inH else 0)
+    private val tileInU8: ByteBuffer =
+        ByteBuffer.allocateDirect(tileBytes.size).order(ByteOrder.nativeOrder())
+    private var scratchU8: ByteBuffer? = null
 
     // Rolling stats, published every STATS_EVERY frames.
     private var frames = 0
@@ -98,7 +108,14 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         // Atlas of float output tiles. Nearest filtering is required for texelFetch on float textures.
         GLES30.glGenTextures(1, t, 0); atlas = t[0]
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, atlas)
-        if (up.planarOut) {
+        // uint8 models keep the atlas as 8-bit (4x less upload and memory); the shader dequantises.
+        if (q) {
+            if (up.planarOut) {
+                GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R8, fullW, atlasH, 0, GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, null)
+            } else {
+                GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGB8, fullW, atlasH, 0, GLES30.GL_RGB, GLES30.GL_UNSIGNED_BYTE, null)
+            }
+        } else if (up.planarOut) {
             GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_R32F, fullW, atlasH, 0, GLES30.GL_RED, GLES30.GL_FLOAT, null)
         } else {
             GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGB32F, fullW, atlasH, 0, GLES30.GL_RGB, GLES30.GL_FLOAT, null)
@@ -118,6 +135,9 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         uFull = GLES30.glGetUniformLocation(presentProg, "uFull")
         uPlanar = GLES30.glGetUniformLocation(presentProg, "uPlanar")
         uMode = GLES30.glGetUniformLocation(presentProg, "uMode")
+        uQuant = GLES30.glGetUniformLocation(presentProg, "uQuant")
+        uOutScale = GLES30.glGetUniformLocation(presentProg, "uOutScale")
+        uOutZero = GLES30.glGetUniformLocation(presentProg, "uOutZero")
     }
 
     fun release() {
@@ -167,17 +187,31 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         for (ty in 0 until rows) for (tx in 0 until cols) {
             val c0 = System.nanoTime()
             fillTile(tx, ty)
-            tileIn.clear()
-            tileIn.put(tileFloats)
-            tileIn.rewind()
+            if (q) {
+                tileInU8.clear()
+                tileInU8.put(tileBytes)
+                tileInU8.rewind()
+            } else {
+                tileIn.clear()
+                tileIn.put(tileFloats)
+                tileIn.rewind()
+            }
             val c1 = System.nanoTime()
             conv += c1 - c0
             var cbStart = 0L
             var cbEnd = 0L
-            up.infer(tileIn) { out ->
-                cbStart = System.nanoTime()
-                upload(out, tx, ty)
-                cbEnd = System.nanoTime()
+            if (q) {
+                up.inferU8(tileInU8) { out ->
+                    cbStart = System.nanoTime()
+                    uploadU8(out, tx, ty)
+                    cbEnd = System.nanoTime()
+                }
+            } else {
+                up.infer(tileIn) { out ->
+                    cbStart = System.nanoTime()
+                    upload(out, tx, ty)
+                    cbEnd = System.nanoTime()
+                }
             }
             val c2 = System.nanoTime()
             npu += (cbStart - c1) + (c2 - cbEnd)
@@ -198,6 +232,9 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         GLES30.glUniform2i(uFull, fullW, fullH)
         GLES30.glUniform1i(uPlanar, if (up.planarOut) 1 else 0)
         GLES30.glUniform1i(uMode, AiSettings.viewMode)
+        GLES30.glUniform1i(uQuant, if (q) 1 else 0)
+        GLES30.glUniform1f(uOutScale, up.outScale)
+        GLES30.glUniform1f(uOutZero, up.outZero.toFloat())
         bindQuad(quad)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -225,8 +262,12 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         lastPublish = now
     }
 
-    /** Cuts tile (tx, ty) out of the read-back image into [tileFloats], top row first, as the model expects. */
+    /**
+     * Cuts tile (tx, ty) out of the read-back image into [tileFloats] (or [tileBytes] for uint8 models),
+     * top row first, as the model expects.
+     */
     private fun fillTile(tx: Int, ty: Int) {
+        if (q) { fillTileU8(tx, ty); return }
         val w = up.inW
         val h = up.inH
         val plane = w * h
@@ -254,24 +295,72 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         }
     }
 
-    private fun upload(out: FloatBuffer, tx: Int, ty: Int) {
-        var fb = out
-        if (!fb.isDirect || fb.order() != ByteOrder.nativeOrder()) {
-            // GL needs a native-order direct buffer; copy if the runtime gave us anything else.
-            val need = out.capacity()
-            var s = scratch
-            if (s == null || s.capacity() < need) {
-                s = ByteBuffer.allocateDirect(need * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-                scratch = s
+    private fun fillTileU8(tx: Int, ty: Int) {
+        val w = up.inW
+        val h = up.inH
+        val plane = w * h
+        val lut = up.inLut
+        for (y in 0 until h) {
+            val srcRow = (lowH - 1) - (ty * h + y) // GL rows run bottom to top
+            var p = (srcRow * lowW + tx * w) * 4
+            for (x in 0 until w) {
+                val r = lut[rgba[p].toInt() and 0xFF]
+                val g = lut[rgba[p + 1].toInt() and 0xFF]
+                val b = lut[rgba[p + 2].toInt() and 0xFF]
+                if (up.nchwIn) {
+                    val i = y * w + x
+                    tileBytes[i] = r
+                    tileBytes[plane + i] = g
+                    tileBytes[2 * plane + i] = b
+                } else {
+                    val i = (y * w + x) * 3
+                    tileBytes[i] = r
+                    tileBytes[i + 1] = g
+                    tileBytes[i + 2] = b
+                }
+                p += 4
             }
-            s!!.clear()
-            out.rewind()
-            s.put(out)
-            s.rewind()
-            fb = s
-        } else {
-            fb.rewind()
         }
+    }
+
+    private fun uploadU8(out: ByteBuffer, tx: Int, ty: Int) {
+        // Always copy into a native-order direct buffer we own: the runtime's buffer may be read-only.
+        val need = out.remaining()
+        var s = scratchU8
+        if (s == null || s.capacity() < need) {
+            s = ByteBuffer.allocateDirect(need).order(ByteOrder.nativeOrder())
+            scratchU8 = s
+        }
+        s!!.clear()
+        s.put(out.duplicate())
+        s.rewind()
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
+        if (up.planarOut) {
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D, 0, tx * up.outW, ty * up.outH * 3, up.outW, up.outH * 3,
+                GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, s,
+            )
+        } else {
+            GLES30.glTexSubImage2D(
+                GLES30.GL_TEXTURE_2D, 0, tx * up.outW, ty * up.outH, up.outW, up.outH,
+                GLES30.GL_RGB, GLES30.GL_UNSIGNED_BYTE, s,
+            )
+        }
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+    }
+
+    private fun upload(out: FloatBuffer, tx: Int, ty: Int) {
+        // Always copy into a native-order direct buffer we own: the runtime's buffer may be read-only.
+        val need = out.remaining()
+        var sc = scratch
+        if (sc == null || sc.capacity() < need) {
+            sc = ByteBuffer.allocateDirect(need * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            scratch = sc
+        }
+        sc!!.clear()
+        sc.put(out.duplicate())
+        sc.rewind()
+        val fb = sc
         if (up.planarOut) {
             GLES30.glTexSubImage2D(
                 GLES30.GL_TEXTURE_2D, 0, tx * up.outW, ty * up.outH * 3, up.outW, up.outH * 3,
@@ -339,8 +428,16 @@ uniform ivec2 uTileOut;
 uniform ivec2 uFull;
 uniform int uPlanar;
 uniform int uMode;
+uniform int uQuant;
+uniform float uOutScale;
+uniform float uOutZero;
 in vec2 vUv;
 out vec4 outColor;
+
+// uint8 atlas: the sampler returns q / 255, so recover q and apply (q - zeroPoint) * scale.
+float deq(float t) {
+    return uQuant == 1 ? (t * 255.0 - uOutZero) * uOutScale : t;
+}
 
 // p is a pixel of the full AI image, row 0 = top.
 vec3 fetchAi(ivec2 p) {
@@ -350,11 +447,12 @@ vec3 fetchAi(ivec2 p) {
     if (uPlanar == 1) {
         int x = t.x * uTileOut.x + l.x;
         int y = t.y * uTileOut.y * 3 + l.y;
-        return vec3(texelFetch(uAtlas, ivec2(x, y), 0).r,
-                    texelFetch(uAtlas, ivec2(x, y + uTileOut.y), 0).r,
-                    texelFetch(uAtlas, ivec2(x, y + 2 * uTileOut.y), 0).r);
+        return vec3(deq(texelFetch(uAtlas, ivec2(x, y), 0).r),
+                    deq(texelFetch(uAtlas, ivec2(x, y + uTileOut.y), 0).r),
+                    deq(texelFetch(uAtlas, ivec2(x, y + 2 * uTileOut.y), 0).r));
     }
-    return texelFetch(uAtlas, p, 0).rgb;
+    vec3 t = texelFetch(uAtlas, p, 0).rgb;
+    return vec3(deq(t.r), deq(t.g), deq(t.b));
 }
 
 void main() {

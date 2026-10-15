@@ -7,10 +7,22 @@ import ai.onnxruntime.OrtLoggingLevel
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
 import android.system.Os
+import org.json.JSONObject
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
+/**
+ * Runs a 4x super-resolution ONNX model on the Snapdragon NPU (QNN/HTP).
+ *
+ * Two I/O flavours are supported:
+ *  - float32 in / float32 out (pixel values 0..1);
+ *  - uint8 in / uint8 out (the w8a8 exports from Qualcomm AI Hub). The quantisation scale and zero point are read
+ *    from the `metadata.json` that ships next to the model (the ONNX Java API does not expose them).
+ *    Use [inferU8] for those: feed raw 0..255 pixels mapped through [inLut], and dequantise the output with
+ *    `(q - outZero) * outScale`.
+ */
 class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
@@ -25,12 +37,21 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
     val outH: Int
     val nchwIn: Boolean
     val planarOut: Boolean
+    /** True for uint8 models: use [inferU8] instead of [infer]. */
+    val quantized: Boolean
+    val inScale: Float
+    val inZero: Int
+    val outScale: Float
+    val outZero: Int
+    /** Maps a raw 0..255 pixel byte to the model's quantised input value. Identity for scale 1/255, zero point 0. */
+    val inLut = ByteArray(256)
     /** Requested provider configuration; NPU execution is not verified by this class. */
     val note: String
 
     private val inputLock = Any()
     @Volatile private var closed = false
-    private val scratch: FloatBuffer
+    private val scratch: FloatBuffer?
+    private val scratchU8: ByteBuffer?
     private val cachedInputTensor: OnnxTensor
 
     init {
@@ -103,9 +124,12 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
             val ii = session.inputInfo[inName]!!.info as TensorInfo
             val oi = session.outputInfo[session.outputNames.first()]!!.info as TensorInfo
 
-            require(ii.type == OnnxJavaType.FLOAT && oi.type == OnnxJavaType.FLOAT) {
-                "Model must have float32 input and output (found ${ii.type} / ${oi.type})"
+            val isFloat = ii.type == OnnxJavaType.FLOAT && oi.type == OnnxJavaType.FLOAT
+            val isU8 = ii.type == OnnxJavaType.UINT8 && oi.type == OnnxJavaType.UINT8
+            require(isFloat || isU8) {
+                "Model must have float32 or uint8 input and output (found ${ii.type} / ${oi.type})"
             }
+            quantized = isU8
             require(ii.shape.size == 4 && oi.shape.size == 4) {
                 "Model input/output must be rank 4 (in ${ii.shape.toList()}, out ${oi.shape.toList()})"
             }
@@ -117,7 +141,7 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
             val i2 = positiveInt(ii.shape[2], "input dim 2")
             val i3 = positiveInt(ii.shape[3], "input dim 3")
             val inElements = Math.multiplyExact(Math.multiplyExact(i1, i2), i3)
-            val inByteSize = Math.multiplyExact(inElements, 4)
+            val inByteSize = Math.multiplyExact(inElements, if (quantized) 1 else 4)
 
             val o1 = positiveInt(oi.shape[1], "output dim 1")
             val o2 = positiveInt(oi.shape[2], "output dim 2")
@@ -137,10 +161,26 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
             outH = b[2]
 
             val bb = ByteBuffer.allocateDirect(inByteSize).order(ByteOrder.nativeOrder())
-            scratch = bb.asFloatBuffer()
-            require(scratch.capacity() == inElements) { "Scratch buffer capacity mismatch" }
-
-            createdTensor = OnnxTensor.createTensor(env, scratch, inShape)
+            if (quantized) {
+                val q = readQuantization(modelPath, session.inputNames.first(), session.outputNames.first())
+                inScale = q[0]; inZero = q[1].toInt(); outScale = q[2]; outZero = q[3].toInt()
+                for (v in 0..255) {
+                    val qv = Math.round((v / 255f) / inScale) + inZero
+                    inLut[v] = qv.coerceIn(0, 255).toByte()
+                }
+                scratch = null
+                scratchU8 = bb
+                require(bb.capacity() == inElements) { "Scratch buffer capacity mismatch" }
+                createdTensor = OnnxTensor.createTensor(env, bb, inShape, OnnxJavaType.UINT8)
+            } else {
+                inScale = 1f; inZero = 0; outScale = 1f; outZero = 0
+                for (v in 0..255) inLut[v] = v.toByte()
+                val fb = bb.asFloatBuffer()
+                scratch = fb
+                scratchU8 = null
+                require(fb.capacity() == inElements) { "Scratch buffer capacity mismatch" }
+                createdTensor = OnnxTensor.createTensor(env, fb, inShape)
+            }
             cachedInputTensor = createdTensor!!
         } catch (t: Throwable) {
             safeClose(createdTensor)
@@ -152,26 +192,49 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
     }
 
     fun describe() = "in ${inW}x$inH -> out ${outW}x$outH (${if (nchwIn) "NCHW" else "NHWC"} in, " +
-        "${if (planarOut) "NCHW" else "NHWC"} out), $note"
+        "${if (planarOut) "NCHW" else "NHWC"} out, ${if (quantized) "uint8" else "float32"}), $note"
 
+    /** Float models. [consume] sees the output only while it runs; do not keep the buffer. */
     fun infer(input: FloatBuffer, consume: (FloatBuffer) -> Unit): Unit = synchronized(inputLock) {
-        check(!closed) { IllegalStateException("NpuUpscaler is closed") }
-
+        check(!closed) { "NpuUpscaler is closed" }
+        check(!quantized) { "Model is uint8; call inferU8" }
+        val fb = scratch!!
         val dup = input.duplicate()
         val rem = dup.remaining()
-        require(rem == scratch.capacity()) {
-            "Tile size mismatch: expected ${scratch.capacity()} floats, got $rem"
+        require(rem == fb.capacity()) {
+            "Tile size mismatch: expected ${fb.capacity()} floats, got $rem"
         }
 
-        scratch.clear()
-        scratch.put(dup)
-        scratch.rewind()
+        fb.clear()
+        fb.put(dup)
+        fb.rewind()
         // Caller position/limit preserved via duplicate().
 
         session.run(mapOf(inName to cachedInputTensor)).use { results ->
-            val src = (results[0] as OnnxTensor).floatBuffer
-            val copy = FloatBuffer.allocate(src.remaining()).also { it.put(src); it.rewind() }
-            consume(copy)
+            consume((results[0] as OnnxTensor).floatBuffer)
+        }
+    }
+
+    /**
+     * uint8 models. [input] holds already-quantised bytes (raw pixel bytes mapped through [inLut]).
+     * [consume] sees the quantised output bytes only while it runs; do not keep the buffer.
+     */
+    fun inferU8(input: ByteBuffer, consume: (ByteBuffer) -> Unit): Unit = synchronized(inputLock) {
+        check(!closed) { "NpuUpscaler is closed" }
+        check(quantized) { "Model is float32; call infer" }
+        val bb = scratchU8!!
+        val dup = input.duplicate()
+        val rem = dup.remaining()
+        require(rem == bb.capacity()) {
+            "Tile size mismatch: expected ${bb.capacity()} bytes, got $rem"
+        }
+
+        bb.clear()
+        bb.put(dup)
+        bb.rewind()
+
+        session.run(mapOf(inName to cachedInputTensor)).use { results ->
+            consume((results[0] as OnnxTensor).byteBuffer)
         }
     }
 
@@ -195,5 +258,31 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
             shape[1] == 3L && shape[3] != 3L -> intArrayOf(1, shape[3].toInt(), shape[2].toInt())
             else -> throw IllegalStateException("Ambiguous or missing 3-channel axis in ${shape.toList()}")
         }
+    }
+
+    /**
+     * Reads [inScale, inZero, outScale, outZero] for a uint8 model from the metadata.json next to it
+     * (AI Hub layout: model_files.<file>.inputs/outputs.<name>.quantization_parameters).
+     */
+    private fun readQuantization(modelPath: String, inputName: String, outputName: String): FloatArray {
+        val model = File(modelPath)
+        val meta = File(model.parentFile, "metadata.json")
+        check(meta.exists()) {
+            "uint8 model needs metadata.json (quantization scale/zero point) next to ${model.name}. " +
+                "Pick the original .zip, which contains it."
+        }
+        val files = JSONObject(meta.readText()).getJSONObject("model_files")
+        val entry = files.optJSONObject(model.name) ?: files.getJSONObject(files.keys().next())
+        fun params(section: String, name: String): Pair<Float, Int> {
+            val tensors = entry.getJSONObject(section)
+            val t = tensors.optJSONObject(name) ?: tensors.getJSONObject(tensors.keys().next())
+            val q = t.getJSONObject("quantization_parameters")
+            val scale = q.getDouble("scale").toFloat()
+            check(scale > 0f) { "Bad quantization scale $scale in metadata.json" }
+            return scale to q.getInt("zero_point")
+        }
+        val i = params("inputs", inputName)
+        val o = params("outputs", outputName)
+        return floatArrayOf(i.first, i.second.toFloat(), o.first, o.second.toFloat())
     }
 }
