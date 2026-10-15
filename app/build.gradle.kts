@@ -37,10 +37,10 @@ android {
         jvmTarget = "17"
     }
 }
-
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.1")
-    // Experimental AI upscaler: ONNX Runtime with Qualcomm's QNN provider (Hexagon NPU).
     implementation("com.microsoft.onnxruntime:onnxruntime-android-qnn:1.24.3")
+    testImplementation("org.jetbrains.kotlin:kotlin-test:1.9.23")
+    testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.23")
 }

@@ -1,4 +1,3 @@
-kotlin
 package com.example.gamelens
 
 import ai.onnxruntime.OnnxTensor
@@ -72,10 +71,10 @@ class NpuUpscalerReuseTest {
             assertEquals(refA.capacity(), outA.capacity(), "Output size mismatch for A")
             assertEquals(refB.capacity(), outB.capacity(), "Output size mismatch for B")
             for (i in 0 until refA.capacity()) {
-                assertEquals(refA.get(i), outA.get(i), tolerance, "A mismatch at index $`i")
+                assertEquals(refA.get(i), outA.get(i), tolerance, "A mismatch at index $i")
             }
             for (i in 0 until refB.capacity()) {
-                assertEquals(refB.get(i), outB.get(i), tolerance, "B mismatch at index `$i")
+                assertEquals(refB.get(i), outB.get(i), tolerance, "B mismatch at index $i")
             }
         } finally {
             cached.close()
