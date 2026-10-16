@@ -25,6 +25,10 @@ import java.nio.FloatBuffer
  */
 class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
 
+    private companion object {
+        const val MAX_ATTEMPTS = 4
+    }
+
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val opts: OrtSession.SessionOptions
     private val session: OrtSession
@@ -74,20 +78,20 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
             }
         }
 
-        fun open(mode: Int): Pair<OrtSession, OrtSession.SessionOptions> {
+        // NPU only. There is no CPU fallback: if any node cannot run on the NPU the session is refused.
+        // Session creation occasionally fails transiently (the same model passes on another attempt), so retry.
+        fun open(): Pair<OrtSession, OrtSession.SessionOptions> {
             val o = OrtSession.SessionOptions()
             try {
                 o.setSessionLogLevel(OrtLoggingLevel.ORT_LOGGING_LEVEL_INFO)
-                if (mode < 2) {
-                    o.addQnn(
-                        mapOf(
-                            "backend_path" to "libQnnHtp.so",
-                            "htp_performance_mode" to "burst",
-                            "enable_htp_fp16_precision" to "1",
-                        )
+                o.addQnn(
+                    mapOf(
+                        "backend_path" to "libQnnHtp.so",
+                        "htp_performance_mode" to "burst",
+                        "enable_htp_fp16_precision" to "1",
                     )
-                    if (mode == 0) o.addConfigEntry("session.disable_cpu_ep_fallback", "1")
-                }
+                )
+                o.addConfigEntry("session.disable_cpu_ep_fallback", "1")
                 return env.createSession(modelPath, o) to o
             } catch (t: Throwable) {
                 o.close()
@@ -97,20 +101,20 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
 
         val errs = ArrayList<String>()
         var pair: Pair<OrtSession, OrtSession.SessionOptions>? = null
-        for (mode in 0..2) {
+        for (attempt in 1..MAX_ATTEMPTS) {
             try {
-                pair = open(mode)
-                configNote = when (mode) {
-                    0 -> "Requested QNN/HTP, no CPU fallback"
-                    1 -> "Requested QNN/HTP with CPU fallback (strict failed: ${errs.joinToString()})"
-                    else -> "Requested CPU only; NPU path failed: ${errs.joinToString()}"
-                }
+                pair = open()
+                configNote = if (attempt == 1) "NPU only (QNN/HTP), no CPU fallback"
+                else "NPU only (QNN/HTP), no CPU fallback, needed $attempt attempts"
                 break
             } catch (t: Throwable) {
-                errs += "m$mode: ${t.message?.take(160)}"
+                errs += "try $attempt: ${t.message?.take(160)}"
+                if (attempt < MAX_ATTEMPTS) Thread.sleep(500L * attempt)
             }
         }
-        if (pair == null) throw IllegalStateException(errs.joinToString(" | "))
+        if (pair == null) {
+            throw IllegalStateException("Could not run the whole model on the NPU (no CPU fallback). " + errs.joinToString(" | "))
+        }
 
         createdSession = pair!!.first
         sessionOpts = pair!!.second
