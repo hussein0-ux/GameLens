@@ -78,7 +78,7 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
             }
         }
 
-        // NPU only. There is no CPU fallback: if any node cannot run on the NPU the session is refused.
+        // NPU with CPU fallback enabled: unsupported nodes can route to CPU execution provider.
         // Session creation occasionally fails transiently (the same model passes on another attempt), so retry.
         fun open(): Pair<OrtSession, OrtSession.SessionOptions> {
             val o = OrtSession.SessionOptions()
@@ -91,7 +91,7 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
                         "enable_htp_fp16_precision" to "1",
                     )
                 )
-                o.addConfigEntry("session.disable_cpu_ep_fallback", "1")
+                o.addConfigEntry("session.disable_cpu_ep_fallback", "0")
                 return env.createSession(modelPath, o) to o
             } catch (t: Throwable) {
                 o.close()
@@ -104,16 +104,16 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
         for (attempt in 1..MAX_ATTEMPTS) {
             try {
                 pair = open()
-                configNote = if (attempt == 1) "NPU only (QNN/HTP), no CPU fallback"
-                else "NPU only (QNN/HTP), no CPU fallback, needed $attempt attempts"
+                configNote = if (attempt == 1) "NPU (QNN/HTP) with CPU fallback"
+                else "NPU (QNN/HTP) with CPU fallback, needed $attempt attempts"
                 break
             } catch (t: Throwable) {
-                errs += "try $attempt: ${t.message?.take(160)}"
+                errs += "try $attempt:${t.message?.take(160)}"
                 if (attempt < MAX_ATTEMPTS) Thread.sleep(500L * attempt)
             }
         }
         if (pair == null) {
-            throw IllegalStateException("Could not run the whole model on the NPU (no CPU fallback). " + errs.joinToString(" | "))
+            throw IllegalStateException("Could not run model session on NPU with CPU fallback. " + errs.joinToString(" | "))
         }
 
         createdSession = pair!!.first
@@ -131,14 +131,14 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
             val isFloat = ii.type == OnnxJavaType.FLOAT && oi.type == OnnxJavaType.FLOAT
             val isU8 = ii.type == OnnxJavaType.UINT8 && oi.type == OnnxJavaType.UINT8
             require(isFloat || isU8) {
-                "Model must have float32 or uint8 input and output (found ${ii.type} / ${oi.type})"
+                "Model must have float32 or uint8 input and output (found ${ii.type} /${oi.type})"
             }
             quantized = isU8
             require(ii.shape.size == 4 && oi.shape.size == 4) {
-                "Model input/output must be rank 4 (in ${ii.shape.toList()}, out ${oi.shape.toList()})"
+                "Model input/output must be rank 4 (in ${ii.shape.toList()}, out${oi.shape.toList()})"
             }
             require(ii.shape[0] == 1L && oi.shape[0] == 1L) {
-                "Model batch dimension must be 1 (in ${ii.shape.toList()}, out ${oi.shape.toList()})"
+                "Model batch dimension must be 1 (in ${ii.shape.toList()}, out${oi.shape.toList()})"
             }
 
             val i1 = positiveInt(ii.shape[1], "input dim 1")
@@ -195,7 +195,7 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
         }
     }
 
-    fun describe() = "in ${inW}x$inH -> out ${outW}x$outH (${if (nchwIn) "NCHW" else "NHWC"} in, " +
+    fun describe() = "in ${inW}x$inH -> out${outW}x$outH (${if (nchwIn) "NCHW" else "NHWC"} in, " +
         "${if (planarOut) "NCHW" else "NHWC"} out, ${if (quantized) "uint8" else "float32"}), $note"
 
     /** Float models. [consume] sees the output only while it runs; do not keep the buffer. */
@@ -206,7 +206,7 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
         val dup = input.duplicate()
         val rem = dup.remaining()
         require(rem == fb.capacity()) {
-            "Tile size mismatch: expected ${fb.capacity()} floats, got $rem"
+            "Tile size mismatch: expected ${fb.capacity()} floats, got$rem"
         }
 
         fb.clear()
@@ -230,7 +230,7 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
         val dup = input.duplicate()
         val rem = dup.remaining()
         require(rem == bb.capacity()) {
-            "Tile size mismatch: expected ${bb.capacity()} bytes, got $rem"
+            "Tile size mismatch: expected ${bb.capacity()} bytes, got$rem"
         }
 
         bb.clear()
@@ -251,7 +251,7 @@ class NpuUpscaler(modelPath: String, nativeLibDir: String) : AutoCloseable {
     }
 
     private fun positiveInt(v: Long, label: String): Int {
-        require(v > 0 && v <= Int.MAX_VALUE) { "$label must be positive and fit in Int, got $v" }
+        require(v > 0 && v <= Int.MAX_VALUE) { "$label must be positive and fit in Int, got$v" }
         return v.toInt()
     }
 
