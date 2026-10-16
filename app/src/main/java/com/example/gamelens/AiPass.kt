@@ -79,6 +79,7 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
     private var sumConv = 0L
     private var sumNpu = 0L
     private var sumUp = 0L
+    private var sumGpu = 0L
     private var sumTotal = 0L
     private var lastPublish = System.nanoTime()
 
@@ -238,6 +239,10 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         bindQuad(quad)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        // Diagnostic: wait for the GPU so the present draw (and anything still queued) is counted.
+        val tg0 = System.nanoTime()
+        GLES30.glFinish()
+        sumGpu += System.nanoTime() - tg0
         val t3 = System.nanoTime()
 
         sumRead += t1 - t0
@@ -254,11 +259,11 @@ class AiPass(private val up: NpuUpscaler, val cols: Int, val rows: Int) {
         val fps = n / ((now - lastPublish) / 1e9)
         AiSettings.stats = String.format(
             Locale.US,
-            "%.0f fps | per frame: read %.1f, convert %.1f, NPU %.1f, upload %.1f, total %.1f ms\n%d tiles: %dx%d -> %dx%d",
-            fps, ms(sumRead), ms(sumConv), ms(sumNpu), ms(sumUp), ms(sumTotal),
+            "%.0f fps | per frame: read %.1f, convert %.1f, NPU %.1f, upload %.1f, GPU wait %.1f, total %.1f ms\n%d tiles: %dx%d -> %dx%d",
+            fps, ms(sumRead), ms(sumConv), ms(sumNpu), ms(sumUp), ms(sumGpu), ms(sumTotal),
             cols * rows, lowW, lowH, fullW, fullH,
         )
-        frames = 0; sumRead = 0; sumConv = 0; sumNpu = 0; sumUp = 0; sumTotal = 0
+        frames = 0; sumGpu = 0; sumRead = 0; sumConv = 0; sumNpu = 0; sumUp = 0; sumTotal = 0
         lastPublish = now
     }
 

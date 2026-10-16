@@ -14,4 +14,6 @@ object AiSettings {
     @Volatile var nativeLibDir = ""
     @Volatile var status = "AI idle"
     @Volatile var stats = ""
+    /** Capture/swap diagnostics from the GL thread. */
+    @Volatile var diag = ""
 }

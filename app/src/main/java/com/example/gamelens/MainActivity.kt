@@ -51,7 +51,8 @@ class MainActivity : ComponentActivity() {
     private val statsTick = object : Runnable {
         override fun run() {
             val st = AiSettings.stats
-            statsView?.text = AiSettings.status + if (st.isNotEmpty()) "\n$st" else ""
+            val dg = AiSettings.diag
+            statsView?.text = AiSettings.status + (if (st.isNotEmpty()) "\n$st" else "") + (if (dg.isNotEmpty()) "\n$dg" else "")
             ui.postDelayed(this, 500)
         }
     }

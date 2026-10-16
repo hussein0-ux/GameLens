@@ -94,6 +94,24 @@ class GlPipeline(
     private var aiGeneration = 0
     private var lastFrameTs = 0L
 
+    // Diagnostics, published about once a second.
+    private var dgCaptured = 0
+    private var dgDrawn = 0
+    private var dgSwapNs = 0L
+    private var dgSince = System.nanoTime()
+
+    private fun dgPublish() {
+        val now = System.nanoTime()
+        val dt = (now - dgSince) / 1e9
+        if (dt < 1.0) return
+        AiSettings.diag = String.format(
+            java.util.Locale.US,
+            "capture %.0f frames/s, drawn %.0f/s, swap %.1f ms/frame",
+            dgCaptured / dt, dgDrawn / dt, if (dgDrawn > 0) dgSwapNs / dgDrawn / 1e6 else 0.0,
+        )
+        dgCaptured = 0; dgDrawn = 0; dgSwapNs = 0; dgSince = now
+    }
+
     /** Blocks briefly until the GL thread has built the context and the capture surface exists. */
     fun start() {
         val latch = CountDownLatch(1)
@@ -218,6 +236,7 @@ class GlPipeline(
 
     private fun drawFrame() {
         if (released) return
+        dgCaptured++
         surfaceTexture.updateTexImage()
         surfaceTexture.getTransformMatrix(stMatrix)
 
@@ -331,7 +350,11 @@ class GlPipeline(
             if (ts == lastFrameTs) return true // no new captured frame since last time
             lastFrameTs = ts
             pass.render(oesTex, stMatrix, quad, outW, outH)
+            val s0 = System.nanoTime()
             EGL14.eglSwapBuffers(eglDisplay, eglSurface)
+            dgSwapNs += System.nanoTime() - s0
+            dgDrawn++
+            dgPublish()
             return true
         } catch (t: Throwable) {
             aiFailedPath = path
