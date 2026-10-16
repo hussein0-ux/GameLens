@@ -451,8 +451,8 @@ vec3 fetchAi(ivec2 p) {
                     deq(texelFetch(uAtlas, ivec2(x, y + uTileOut.y), 0).r),
                     deq(texelFetch(uAtlas, ivec2(x, y + 2 * uTileOut.y), 0).r));
     }
-    vec3 t = texelFetch(uAtlas, p, 0).rgb;
-    return vec3(deq(t.r), deq(t.g), deq(t.b));
+    vec3 q = texelFetch(uAtlas, p, 0).rgb;
+    return vec3(deq(q.r), deq(q.g), deq(q.b));
 }
 
 void main() {
