@@ -238,8 +238,22 @@ class GlPipeline(
         fboW = w; fboH = h; cur = 0; hasPrev = false
     }
 
+    private var drawErrors = 0
+
+    /** Never lets an exception escape the GL thread (that would kill the whole app). */
     private fun drawFrame() {
         if (released) return
+        try {
+            drawFrameUnsafe()
+        } catch (t: Throwable) {
+            if (released) return
+            Log.e(TAG, "drawFrame failed", t)
+            if (++drawErrors <= 3) runCatching { GameLensApp.record(GameLensApp.instance, "drawFrame", t) }
+            AiSettings.status = "Draw error (skipped frame): ${t.javaClass.simpleName}: ${t.message}"
+        }
+    }
+
+    private fun drawFrameUnsafe() {
         dgCaptured++
         surfaceTexture.updateTexImage()
         surfaceTexture.getTransformMatrix(stMatrix)
@@ -510,7 +524,7 @@ void main() {
         vec3 wide = (tap(vec2(-14.0, -14.0)) + tap(vec2(14.0, -14.0)) + tap(vec2(-14.0, 14.0)) + tap(vec2(14.0, 14.0))
                    + tap(vec2(-26.0, 0.0)) + tap(vec2(26.0, 0.0)) + tap(vec2(0.0, -26.0)) + tap(vec2(0.0, 26.0))) * 0.125;
         float localL = luma(wide);
-        float gain = clamp(pow(0.42 / (localL + 0.04), 0.5), 0.75, 1.7);
+        float gain = clamp(pow(0.42 / (localL + 0.04), 0.5), 0.92, 1.7);
         col *= mix(1.0, gain, uHdr * 0.55);
         float lc = luma(col);
         float hi = smoothstep(0.62, 1.0, lc);

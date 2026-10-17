@@ -43,6 +43,8 @@ class CaptureService : Service() {
     private var pipeline: GlPipeline? = null
     private var overlay: SurfaceView? = null
     private var overlayWm: WindowManager? = null
+    private var overlayParams: WindowManager.LayoutParams? = null
+    private var overlayShown = true
     private var dpi = 420
 
     private val displayListener = object : DisplayManager.DisplayListener {
@@ -52,8 +54,10 @@ class CaptureService : Service() {
             if (displayId != android.view.Display.DEFAULT_DISPLAY) return
             val (w, h) = realSize()
             val vd = virtualDisplay ?: return
-            vd.resize(w, h, dpi)
-            pipeline?.resize(w, h)
+            runCatching {
+                vd.resize(w, h, dpi)
+                pipeline?.resize(w, h)
+            }.onFailure { GameLensApp.record(this@CaptureService, "displayChanged", it) }
         }
     }
 
@@ -90,6 +94,12 @@ class CaptureService : Service() {
         proj.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
                 main.post { stopSelf() }
+            }
+
+            // Single-app capture: tells us when the shared app is on screen or not. While it is NOT, the overlay
+            // would keep showing the frozen last frame on top of whatever app you switched to, so hide it.
+            override fun onCapturedContentVisibilityChanged(isVisible: Boolean) {
+                main.post { setOverlayVisible(isVisible) }
             }
         }, main)
 
@@ -137,31 +147,59 @@ class CaptureService : Service() {
             }
         })
 
+        overlayParams = lp
         wm.addView(view, lp)
+    }
+
+    /** Makes the whole overlay window fully transparent (and untouched) instead of tearing the surface down. */
+    private fun setOverlayVisible(visible: Boolean) {
+        val v = overlay ?: return
+        val lp = overlayParams ?: return
+        if (overlayShown == visible) return
+        overlayShown = visible
+        val shownAlpha = if (GameLensAccessibilityService.instance != null) 1f else OVERLAY_ALPHA
+        lp.alpha = if (visible) shownAlpha else 0f
+        runCatching { (overlayWm ?: windowManager).updateViewLayout(v, lp) }
+            .onFailure { GameLensApp.record(this, "setOverlayVisible", it) }
     }
 
     private fun startPipeline(holder: SurfaceHolder) {
         val proj = projection ?: return
-        val (w, h) = realSize()
-        val p = GlPipeline(holder.surface, w, h)
-        p.start()
-        pipeline = p
+        try {
+            val (w, h) = realSize()
+            val p = GlPipeline(holder.surface, w, h)
+            p.start()
+            pipeline = p
 
-        virtualDisplay = proj.createVirtualDisplay(
-            "GameLensCapture",
-            w, h, dpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            p.captureSurface,
-            null, null,
-        )
-        displayManager.registerDisplayListener(displayListener, main)
+            val existing = virtualDisplay
+            if (existing != null) {
+                // Android 14+ allows only ONE VirtualDisplay per projection. The overlay surface is destroyed and
+                // re-created when the screen turns off, or on app switches, so reuse the display and swap its target.
+                existing.resize(w, h, dpi)
+                existing.surface = p.captureSurface
+            } else {
+                virtualDisplay = proj.createVirtualDisplay(
+                    "GameLensCapture",
+                    w, h, dpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    p.captureSurface,
+                    null, null,
+                )
+            }
+            runCatching { displayManager.unregisterDisplayListener(displayListener) }
+            displayManager.registerDisplayListener(displayListener, main)
+        } catch (t: Throwable) {
+            GameLensApp.record(this, "startPipeline", t)
+            AiSettings.status = "Capture failed: ${t.javaClass.simpleName}: ${t.message}"
+            stopSelf()
+        }
     }
 
+    /** Releases the GL pipeline only. The VirtualDisplay is kept (see [startPipeline]) and freed in onDestroy. */
     private fun stopPipeline() {
         runCatching { displayManager.unregisterDisplayListener(displayListener) }
-        virtualDisplay?.release()
-        virtualDisplay = null
-        pipeline?.release()
+        runCatching { virtualDisplay?.surface = null }
+        runCatching { pipeline?.release() }
         pipeline = null
     }
 
@@ -195,9 +233,12 @@ class CaptureService : Service() {
 
     override fun onDestroy() {
         stopPipeline()
+        runCatching { virtualDisplay?.release() }
+        virtualDisplay = null
         overlay?.let { runCatching { (overlayWm ?: windowManager).removeView(it) } }
         overlay = null
         overlayWm = null
+        overlayParams = null
         projection?.stop()
         projection = null
         running = false

@@ -11,6 +11,7 @@
         android:required="true" />
 
     <application
+        android:name=".GameLensApp"
         android:allowBackup="false"
         android:label="GameLens"
         android:theme="@android:style/Theme.DeviceDefault.DayNight">

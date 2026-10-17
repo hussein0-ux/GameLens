@@ -75,13 +75,33 @@ class MainActivity : ComponentActivity() {
             textSize = 26f
         })
         root.addView(TextView(this).apply {
-            text = "Build 0.3 - trusted overlay, grade + glow"
+            text = "Build 0.5 - Crisp default, HDR look, crash log"
             textSize = 12f
         })
         root.addView(TextView(this).apply {
             text = "Real-time sharpening, grading and glow for your game.\n" +
                 "When Android asks what to share, choose \"A single app\" and pick your game."
         })
+
+        val crashFile = GameLensApp.crashFile(this)
+        if (crashFile.exists() && crashFile.length() > 0) {
+            val log = crashFile.readText()
+            root.addView(TextView(this).apply {
+                text = "GameLens recorded a problem last time:\n" + log.takeLast(1800)
+                typeface = android.graphics.Typeface.MONOSPACE
+                textSize = 10f
+                setTextColor(0xFFFF6B6B.toInt())
+            })
+            root.addView(Button(this).apply {
+                text = "Copy crash log, then clear it"
+                setOnClickListener {
+                    val cm = getSystemService(android.content.ClipboardManager::class.java)
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("GameLens crash", log))
+                    crashFile.delete()
+                    Toast.makeText(this@MainActivity, "Copied. Paste it to Claude.", Toast.LENGTH_LONG).show()
+                }
+            })
+        }
 
         root.addView(Button(this).apply {
             text = "Start"
