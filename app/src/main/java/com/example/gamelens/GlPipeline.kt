@@ -54,6 +54,8 @@ class GlPipeline(
     private var uMotion = 0
     private var uVig = 0
     private var uChroma = 0
+    private var uHdr = 0
+    private var uBlack = 0
 
     // Motion blur: ping-pong framebuffers hold the previous output frame.
     private var blitProgram = 0
@@ -212,6 +214,8 @@ class GlPipeline(
         uMotion = GLES30.glGetUniformLocation(program, "uMotion")
         uVig = GLES30.glGetUniformLocation(program, "uVig")
         uChroma = GLES30.glGetUniformLocation(program, "uChroma")
+        uHdr = GLES30.glGetUniformLocation(program, "uHdr")
+        uBlack = GLES30.glGetUniformLocation(program, "uBlack")
 
         blitProgram = buildProgram(BLIT_VERTEX_SRC, BLIT_FRAGMENT_SRC)
         bTex = GLES30.glGetUniformLocation(blitProgram, "uTex2")
@@ -271,6 +275,8 @@ class GlPipeline(
         GLES30.glUniform1f(uMotion, if (useMotion) LookSettings.motion else 0f)
         GLES30.glUniform1f(uVig, LookSettings.vignette)
         GLES30.glUniform1f(uChroma, LookSettings.chroma)
+        GLES30.glUniform1f(uHdr, LookSettings.hdr)
+        GLES30.glUniform1f(uBlack, LookSettings.blackPt)
 
         GLES30.glUniformMatrix4fv(uMatrix, 1, false, stMatrix, 0)
         GLES30.glUniform2f(uTexel, 1f / width, 1f / height)
@@ -435,6 +441,8 @@ uniform float uHasPrev;
 uniform float uMotion;
 uniform float uVig;
 uniform float uChroma;
+uniform float uHdr;
+uniform float uBlack;
 
 const vec2 DIRS[8] = vec2[8](
     vec2(1.0, 0.0), vec2(0.7071, 0.7071), vec2(0.0, 1.0), vec2(-0.7071, 0.7071),
@@ -494,6 +502,23 @@ void main() {
         col += (wideAcc / 8.0) * (wideW * 1.2);
     }
 
+    // HDR-style look (SDR emulation): local tone mapping, then highlight punch.
+    //  - the neighbourhood brightness (wide taps) decides a gain: dark areas are lifted, bright areas eased,
+    //    so shadow and highlight detail both stay visible;
+    //  - highlights are then pushed toward the top of the range with their colour preserved.
+    if (uHdr > 0.001) {
+        vec3 wide = (tap(vec2(-14.0, -14.0)) + tap(vec2(14.0, -14.0)) + tap(vec2(-14.0, 14.0)) + tap(vec2(14.0, 14.0))
+                   + tap(vec2(-26.0, 0.0)) + tap(vec2(26.0, 0.0)) + tap(vec2(0.0, -26.0)) + tap(vec2(0.0, 26.0))) * 0.125;
+        float localL = luma(wide);
+        float gain = clamp(pow(0.42 / (localL + 0.04), 0.5), 0.75, 1.7);
+        col *= mix(1.0, gain, uHdr * 0.55);
+        float lc = luma(col);
+        float hi = smoothstep(0.62, 1.0, lc);
+        col += col * hi * uHdr * 0.30;
+        // Roll the very top off smoothly instead of hard-clipping, so bright areas keep detail.
+        col = mix(col, col / (1.0 + max(col - 0.85, 0.0) * 1.2), uHdr);
+    }
+
     // Exposure + gentle S-curve: keeps midtones where they were, adds punch.
     col *= uExposure;
     vec3 curved = clamp(col * col * (3.0 - 2.0 * col), 0.0, 1.0);
@@ -512,6 +537,10 @@ void main() {
     float satNow = chromaMax - chromaMin;
     col = mix(vec3(luma(col)), col, 1.0 + uVibrance * (1.0 - satNow));
     col = mix(vec3(luma(col)), col, uSat);
+
+    // Deeper blacks: lowers the black point (dehaze) and re-expands, keeping whites where they were.
+    float bp = uBlack * 0.07;
+    col = max(col - bp, 0.0) / (1.0 - bp);
 
     col *= 1.0 - uVig * smoothstep(0.30, 0.80, length(suv - 0.5));
     col = clamp(col, 0.0, 1.0);

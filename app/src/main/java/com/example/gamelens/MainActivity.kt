@@ -112,6 +112,18 @@ class MainActivity : ComponentActivity() {
         presetButton("Cinematic", LookSettings.CINEMATIC)
         presetButton("Montage", LookSettings.MONTAGE)
         root.addView(presets)
+        val presets2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        presets2.addView(Button(this).apply {
+            text = "HDR Pop"
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { LookSettings.apply(LookSettings.HDR_POP); refreshers.forEach { it() } }
+        })
+        presets2.addView(Button(this).apply {
+            text = "Crisp"
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { LookSettings.apply(LookSettings.CRISP); refreshers.forEach { it() } }
+        })
+        root.addView(presets2)
 
         slider(root, "Sharpen", 0f, 1f, { LookSettings.sharpen }) { LookSettings.sharpen = it }
         slider(root, "Clarity", 0f, 1f, { LookSettings.clarity }) { LookSettings.clarity = it }
@@ -121,6 +133,8 @@ class MainActivity : ComponentActivity() {
         slider(root, "Vibrance", 0f, 1f, { LookSettings.vibrance }) { LookSettings.vibrance = it }
         slider(root, "Tone curve", 0f, 1f, { LookSettings.filmic }) { LookSettings.filmic = it }
         slider(root, "Teal/orange grade", 0f, 1f, { LookSettings.grade }) { LookSettings.grade = it }
+        slider(root, "HDR look", 0f, 1f, { LookSettings.hdr }) { LookSettings.hdr = it }
+        slider(root, "Deep blacks", 0f, 1f, { LookSettings.blackPt }) { LookSettings.blackPt = it }
         slider(root, "Glow", 0f, 1f, { LookSettings.glow }) { LookSettings.glow = it }
         slider(root, "Vignette", 0f, 1f, { LookSettings.vignette }) { LookSettings.vignette = it }
         slider(root, "Chromatic fringe", 0f, 1f, { LookSettings.chroma }) { LookSettings.chroma = it }
