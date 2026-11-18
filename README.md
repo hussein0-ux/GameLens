@@ -50,23 +50,21 @@ In whole-screen capture the overlay would be captured back into itself (a feedba
 over-sharpens every frame). Single-app capture only includes the chosen app's window, so the
 overlay stays out of the capture.
 
-## AI upscale prototype (v0.4, experimental)
+## Modes (v0.5)
 
-Runs QuickSRNetSmall (ONNX, 128x128 -> 512x512) on the Snapdragon NPU through ONNX Runtime + QNN.
-Pipeline: capture -> GPU box-filter down to (cols*128 x rows*128) -> read back -> tiles through the NPU
--> float atlas texture -> draw to overlay. The look filters are bypassed in this mode.
+Pick one in the app. All of them end in the HyperReal LUT (strength slider).
 
-1. Get a 128x128 -> 512x512 super-resolution **ONNX** zip from Qualcomm AI Hub / Hugging Face. Both float32 I/O (QuickSRNetSmall)
-   and w8a8 uint8 I/O (SESR-M5, Real-ESRGAN-General-x4v3) work. Pick the original .zip: for uint8 models the app reads the
-   quantisation scale/zero point from the `metadata.json` inside it.
-2. In the app: pick the model, tick **Enable AI upscale**, choose an input size, press Start.
-3. Open your game. Return to GameLens to read the per-frame timing breakdown.
-4. Use "Split" view to compare AI (left) against plain bilinear of the same small image (right).
+- **Look filters only**: the original heavy single-pass look, no upscale.
+- **GPU upscale + LUT**: Catmull-Rom 2x upscale with deringing and adaptive sharpen. Meant for a game that renders at half
+  the screen size (CODM: 1560x720 on a 3120x1440 screen). Capture runs at half screen size ("Capture at half screen size").
+- **Neural upscale + LUT**: the captured frame is cropped to the model size, packed on the GPU, run on the Hexagon NPU through
+  LiteRT (int8, planar NCHW, 2x), and the newest result is drawn. Three stages run in parallel (GL, NPU run, NPU read); frames
+  are dropped, never queued. The model's input size must match the game's render size, for example 1168x540 for a game that
+  renders at 1170x540 (display set to 2340x1080 with `adb shell wm size 1080x2340`).
+- **Auto**: neural while at least ~110 results/s are finished, GPU after two slow seconds, back to neural after five fast ones.
 
-Known issues of the prototype: tiles are processed independently, so faint seams at 128 px borders are
-expected; stats are only visible in the app, not over the game; landscape only; the full-resolution
-capture is deliberately shrunk, so this shows pipeline cost and AI-vs-bilinear quality, not a
-real "game rendered at low resolution" gain.
+Pick the model with "Pick neural model": the `.tflite` from Qualcomm AI Hub, or the `.zip` containing it.
+The stats line shows results/s, NPU ms and read ms.
 
 ## Known limitations
 

@@ -2,6 +2,14 @@ package com.example.gamelens
 
 /** Live-tunable look settings. Written by the UI thread, read by the GL thread every frame. */
 object LookSettings {
+    const val MODE_LOOK = 0    // the original heavy look filters, no upscale
+    const val MODE_GPU = 1     // GPU 2x upscale (Catmull-Rom + sharpen) + LUT
+    const val MODE_NEURAL = 2  // NPU 2x upscale + LUT (falls back to GPU for frames the NPU has not finished)
+    const val MODE_AUTO = 3    // neural while it holds the frame rate, GPU otherwise
+
+    const val UPSCALER_CATMULL = 0  // Catmull-Rom + adaptive sharpen (GameLens shader)
+    const val UPSCALER_GSR = 1      // Qualcomm Snapdragon Game Super Resolution 1 (edge-directed)
+
     @Volatile var sharpen = 0.90f     // 0..1    adaptive (CAS-style) sharpening
     @Volatile var clarity = 0.60f     // 0..1    local contrast / micro-contrast
     @Volatile var contrast = 1.08f    // 0.8..1.4
@@ -16,6 +24,15 @@ object LookSettings {
     @Volatile var motion = 0f         // 0..0.6  frame-blend motion blur (blends in the previous frame)
     @Volatile var hdr = 0.25f            // 0..1    HDR-style local tone mapping + highlight punch (SDR emulation)
     @Volatile var blackPt = 0.15f        // 0..1    deeper blacks / dehaze
+    @Volatile var lut = 1.0f             // 0..1    strength of the 3D colour LUT (HyperReal Rec709)
+    @Volatile var mode = MODE_GPU        // MODE_LOOK, MODE_GPU, MODE_NEURAL or MODE_AUTO
+    @Volatile var upscaler = UPSCALER_GSR // which GPU upscaler MODE_GPU uses
+    @Volatile var upSharp = 0.5f         // 0..1    sharpening strength of the upscale pass
+    @Volatile var aa = 0.7f              // 0..1    edge anti-aliasing before the GSR upscale (0 = off)
+    @Volatile var upClarity = 0.3f       // 0..1    local contrast after the GSR upscale (0 = off)
+    @Volatile var upVibrance = 0.25f     // 0..1    boosts muted colours after the GSR upscale (0 = off)
+    @Volatile var captureHalf = true     // capture at half the screen size (the game's own render size); read at start
+    @Volatile var bypass = false         // true: copy the captured frame straight to the screen (capture-rate test)
 
 
     class Preset(

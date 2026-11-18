@@ -52,7 +52,7 @@ class CaptureService : Service() {
         override fun onDisplayRemoved(displayId: Int) {}
         override fun onDisplayChanged(displayId: Int) {
             if (displayId != android.view.Display.DEFAULT_DISPLAY) return
-            val (w, h) = realSize()
+            val (w, h) = captureSize()
             val vd = virtualDisplay ?: return
             runCatching {
                 vd.resize(w, h, dpi)
@@ -166,7 +166,7 @@ class CaptureService : Service() {
     private fun startPipeline(holder: SurfaceHolder) {
         val proj = projection ?: return
         try {
-            val (w, h) = realSize()
+            val (w, h) = captureSize()
             val p = GlPipeline(holder.surface, w, h)
             p.start()
             pipeline = p
@@ -201,6 +201,12 @@ class CaptureService : Service() {
         runCatching { virtualDisplay?.surface = null }
         runCatching { pipeline?.release() }
         pipeline = null
+    }
+
+    /** Half the screen when [LookSettings.captureHalf] is on: that is the size CODM renders at, so we upscale real pixels. */
+    private fun captureSize(): Pair<Int, Int> {
+        val (w, h) = realSize()
+        return if (LookSettings.captureHalf) (w / 2) to (h / 2) else w to h
     }
 
     private fun realSize(): Pair<Int, Int> {

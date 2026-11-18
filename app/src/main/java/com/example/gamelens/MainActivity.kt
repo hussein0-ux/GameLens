@@ -42,7 +42,7 @@ class MainActivity : ComponentActivity() {
 
     private val pickOnnx =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) loadOnnx(uri)
+            if (uri != null) loadModel(uri)
         }
 
     private val ui = Handler(Looper.getMainLooper())
@@ -145,6 +145,38 @@ class MainActivity : ComponentActivity() {
         })
         root.addView(presets2)
 
+        root.addView(TextView(this).apply { text = "Mode" })
+        radioGroup(
+            root,
+            listOf(
+                "Look filters only (heavy, no upscale)",
+                "GPU upscale + LUT (fast)",
+                "Neural upscale + LUT (needs a model and a 1170x540 game)",
+                "Auto: neural, falls back to GPU if it cannot hold the frame rate",
+            ),
+            LookSettings.mode,
+        ) { i -> LookSettings.mode = i }
+        root.addView(CheckBox(this).apply {
+            text = "Capture at half screen size (applies on next start)"
+            isChecked = LookSettings.captureHalf
+            setOnCheckedChangeListener { _, c -> LookSettings.captureHalf = c }
+        })
+        root.addView(TextView(this).apply { text = "GPU upscaler" })
+        radioGroup(
+            root,
+            listOf("Qualcomm GSR (edge-directed, made for games)", "Catmull-Rom + sharpen"),
+            LookSettings.upscaler,
+        ) { i -> LookSettings.upscaler = i }
+        slider(root, "Upscale sharpness", 0f, 1f, { LookSettings.upSharp }) { LookSettings.upSharp = it }
+        slider(root, "Edge anti-aliasing (GSR only)", 0f, 1f, { LookSettings.aa }) { LookSettings.aa = it }
+        slider(root, "Enhance clarity (GSR only)", 0f, 1f, { LookSettings.upClarity }) { LookSettings.upClarity = it }
+        slider(root, "Enhance vibrance (GSR only)", 0f, 1f, { LookSettings.upVibrance }) { LookSettings.upVibrance = it }
+        root.addView(CheckBox(this).apply {
+            text = "Bypass look (raw capture-rate test)"
+            isChecked = LookSettings.bypass
+            setOnCheckedChangeListener { _, c -> LookSettings.bypass = c }
+        })
+        slider(root, "LUT strength (HyperReal)", 0f, 1f, { LookSettings.lut }) { LookSettings.lut = it }
         slider(root, "Sharpen", 0f, 1f, { LookSettings.sharpen }) { LookSettings.sharpen = it }
         slider(root, "Clarity", 0f, 1f, { LookSettings.clarity }) { LookSettings.clarity = it }
         slider(root, "Exposure", 0.8f, 1.4f, { LookSettings.exposure }) { LookSettings.exposure = it }
@@ -176,47 +208,27 @@ class MainActivity : ComponentActivity() {
     private fun addAiSection(root: LinearLayout, pad: Int) {
         AiSettings.nativeLibDir = applicationInfo.nativeLibraryDir
         getSharedPreferences("ai", MODE_PRIVATE).getString("model", null)?.let {
-            if (File(it).exists()) AiSettings.modelPath = it
+            if (it.endsWith(".tflite") && File(it).exists()) AiSettings.modelPath = it
         }
 
         root.addView(TextView(this).apply {
-            text = "AI upscale (experimental, Snapdragon only)"
+            text = "Neural model (Snapdragon NPU)"
             textSize = 18f
             setPadding(0, pad, 0, 0)
         })
         root.addView(TextView(this).apply {
-            text = "Shrinks the screen to a small image, upscales it 4x on the NPU and shows that instead of " +
-                "the look filters below. Use landscape games. Start the capture, then watch the stats here."
+            text = "Pick the int8 planar 2x .tflite from AI Hub (.tflite or the .zip). Its input size must match the game's " +
+                "render size, for example 1168x540 for a game rendering at 1170x540. Then choose Neural or Auto above."
             textSize = 12f
         })
-        root.addView(CheckBox(this).apply {
-            text = "Enable AI upscale"
-            isChecked = AiSettings.enabled
-            setOnCheckedChangeListener { _, c ->
-                AiSettings.enabled = c
-                AiSettings.generation++
-            }
-        })
         root.addView(Button(this).apply {
-            text = "Pick ONNX model (.zip / .onnx)"
+            text = "Pick neural model (.tflite / .zip)"
             setOnClickListener { pickOnnx.launch(arrayOf("*/*")) }
         })
         aiModelLabel = TextView(this).apply {
             text = "Model: " + (AiSettings.modelPath?.let { File(it).name } ?: "(none)")
         }
         root.addView(aiModelLabel)
-
-        val grids = listOf(4 to 2, 6 to 3, 7 to 3)
-        radioGroup(
-            root,
-            listOf("Input 512x256 (8 tiles, fastest)", "Input 768x384 (18 tiles)", "Input 896x384 (21 tiles)"),
-            0,
-        ) { i -> AiSettings.cols = grids[i].first; AiSettings.rows = grids[i].second }
-        radioGroup(
-            root,
-            listOf("AI only", "Split: AI left, plain bilinear right", "Bilinear only"),
-            AiSettings.viewMode,
-        ) { i -> AiSettings.viewMode = i }
 
         statsView = TextView(this).apply {
             typeface = android.graphics.Typeface.MONOSPACE
@@ -238,45 +250,29 @@ class MainActivity : ComponentActivity() {
         parent.addView(g)
     }
 
-    /** Accepts a .onnx or a .zip containing one. Files are kept in app storage so the choice survives restarts. */
-    private fun loadOnnx(uri: Uri) {
+    /** Accepts a .tflite or a .zip containing one. The file is kept in app storage so the choice survives restarts. */
+    private fun loadModel(uri: Uri) {
         try {
             val bytes = contentResolver.openInputStream(uri)!!.use { it.readBytes() }
-            val name = contentResolver.query(uri, null, null, null, null)?.use { c ->
-                val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (i >= 0 && c.moveToFirst()) c.getString(i) else null
-            } ?: "model.onnx"
-            val dir = File(filesDir, "onnx_model").apply { deleteRecursively(); mkdirs() }
-            var onnx: File? = null
+            var tflite: ByteArray? = null
+            var name = "model.tflite"
             if (bytes.size > 4 && bytes[0] == 'P'.code.toByte() && bytes[1] == 'K'.code.toByte()) {
                 ZipInputStream(bytes.inputStream()).use { zin ->
                     var e = zin.nextEntry
-                    while (e != null) {
-                        val base = File(e.name).name
-                        if (!e.isDirectory && (base.endsWith(".onnx") || base.endsWith(".data") || base == "metadata.json")) {
-                            val f = File(dir, base)
-                            f.writeBytes(zin.readBytes())
-                            if (base.endsWith(".onnx")) onnx = f
+                    while (e != null && tflite == null) {
+                        if (!e.isDirectory && e.name.endsWith(".tflite")) {
+                            tflite = zin.readBytes()
+                            name = File(e.name).name
                         }
                         e = zin.nextEntry
                     }
                 }
-            } else if (name.endsWith(".onnx")) {
-                onnx = File(dir, name).also { it.writeBytes(bytes) }
+            } else {
+                tflite = bytes
             }
-            val f = onnx ?: throw IllegalStateException("No .onnx file found in $name")
-            // Models with external weights reference a sidecar file (e.g. "model.data") by name inside the .onnx.
-            // If it is missing, QNN rejects every Conv with a confusing NHWC error, so fail early with a clear message.
-            val text = String(f.readBytes(), Charsets.ISO_8859_1)
-            val missing = Regex("[A-Za-z0-9_.\\-]+\\.(data|bin|weights)").findAll(text)
-                .map { it.value }.distinct().filter { !File(dir, it).exists() }.toList()
-            if (missing.isNotEmpty()) {
-                f.delete()
-                throw IllegalStateException(
-                    "Model needs external weights file(s) ${missing.joinToString()} that were not provided. " +
-                        "Pick the .zip containing them, or use the single-file (inline) .onnx."
-                )
-            }
+            val data = tflite ?: throw IllegalStateException("No .tflite file found in the zip")
+            val dir = File(filesDir, "neural_model").apply { deleteRecursively(); mkdirs() }
+            val f = File(dir, name).also { it.writeBytes(data) }
             AiSettings.modelPath = f.path
             AiSettings.generation++
             getSharedPreferences("ai", MODE_PRIVATE).edit().putString("model", f.path).apply()
