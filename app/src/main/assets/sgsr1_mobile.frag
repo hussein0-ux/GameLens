@@ -1,6 +1,8 @@
 #version 310 es
-// NOTE: Adapted for GameLens (HyperReal LUT added at the end); earlier adapted for NeuralUpscaler (ES 3.1, EdgeSharpness as a uniform, plain varying input, const gather component).
-// Original: Snapdragon Game Super Resolution v1 (sgsr1_shader_mobile.frag), BSD-3-Clause.
+// NOTE: Adapted for GameLens Snapdragon 8 Gen 3 (Adreno 750) 120 Hz HyperReal pipeline.
+// Combines Qualcomm SGSR v1 edge-directed upscale with fused dual-band micro-relief, dark-channel dehaze,
+// tactical shadow recovery, local HDR tone mapping, ACES Filmic, micro-bloom, grading, and HyperReal 3D LUT.
+// Original SGSR1 portions: Snapdragon Game Super Resolution v1 (sgsr1_shader_mobile.frag), BSD-3-Clause.
 
 //============================================================================================================
 //
@@ -51,9 +53,21 @@ uniform highp sampler3D uLut;
 uniform float uLutAmt;
 uniform vec2 uLutMap;
 
-// GameLens: Enhance controls, applied after the upscale and before the LUT. 0 = off.
+// GameLens: Fused 120 Hz Adreno 750 HyperReal controls (applied after SGSR edge reconstruction, before LUT).
 uniform float uClarity;
 uniform float uVibrance;
+uniform float uMicroRelief;
+uniform float uDehaze;
+uniform float uShadowLift;
+uniform float uHdr;
+uniform float uFilmic;
+uniform float uGlow;
+uniform float uExposure;
+uniform float uContrast;
+uniform float uSat;
+uniform float uGrade;
+uniform float uBlack;
+uniform float uVig;
 
 in highp vec4 in_TEXCOORD0;
 layout(location=0) out vec4 out_Target0;
@@ -69,7 +83,22 @@ vec2 weightY(float dx, float dy,float c, float std)
 {
 	float x = ((dx*dx)+(dy* dy))* 0.55 + clamp(abs(c)*std, 0.0, 1.0);
 	float w = fastLanczos2(x);
-	return vec2(w, w * c);	
+	return vec2(w, w * c);
+}
+
+float luma709(vec3 c)
+{
+	return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 acesFilm(vec3 x)
+{
+	const float a = 2.51;
+	const float b = 0.03;
+	const float c = 2.43;
+	const float d = 0.59;
+	const float e = 0.14;
+	return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
 void main()
@@ -84,12 +113,6 @@ void main()
 	else
 		color.xyzw = textureLod(ps0,in_TEXCOORD0.xy,0.0).xyzw;
 
-	highp float xCenter;
-	xCenter = abs(in_TEXCOORD0.x+-0.5);
-	highp float yCenter;
-	yCenter = abs(in_TEXCOORD0.y+-0.5);
-
-	//todo: config the SR region based on needs
 	//if ( mode!=4 && xCenter*xCenter+yCenter*yCenter<=0.4 * 0.4)
 	if ( mode!=4)
 	{
@@ -115,13 +138,13 @@ void main()
 			upDown = upDown - vec4(mean);
 			color.w =color[mode] - mean;
 
-			float sum = (((((abs(left.x)+abs(left.y))+abs(left.z))+abs(left.w))+(((abs(right.x)+abs(right.y))+abs(right.z))+abs(right.w)))+(((abs(upDown.x)+abs(upDown.y))+abs(upDown.z))+abs(upDown.w)));				
-			float std = 2.181818/sum;
-			
-			vec2 aWY = weightY(pl.x, pl.y+1.0, upDown.x,std);				
+			float sum = (((((abs(left.x)+abs(left.y))+abs(left.z))+abs(left.w))+(((abs(right.x)+abs(right.y))+abs(right.z))+abs(right.w)))+(((abs(upDown.x)+abs(upDown.y))+abs(upDown.z))+abs(upDown.w)));
+			float std = 2.181818/max(sum, 1e-4);
+
+			vec2 aWY = weightY(pl.x, pl.y+1.0, upDown.x,std);
 			aWY += weightY(pl.x-1.0, pl.y+1.0, upDown.y,std);
 			aWY += weightY(pl.x-1.0, pl.y-2.0, upDown.z,std);
-			aWY += weightY(pl.x, pl.y-2.0, upDown.w,std);			
+			aWY += weightY(pl.x, pl.y-2.0, upDown.w,std);
 			aWY += weightY(pl.x+1.0, pl.y-1.0, left.x,std);
 			aWY += weightY(pl.x, pl.y-1.0, left.y,std);
 			aWY += weightY(pl.x, pl.y, left.z,std);
@@ -131,14 +154,14 @@ void main()
 			aWY += weightY(pl.x-2.0, pl.y, right.z,std);
 			aWY += weightY(pl.x-1.0, pl.y, right.w,std);
 
-			float finalY = aWY.y/aWY.x;
+			float finalY = aWY.y/max(aWY.x, 1e-4);
 
 			float maxY = max(max(left.y,left.z),max(right.x,right.w));
 			float minY = min(min(left.y,left.z),min(right.x,right.w));
 			finalY = clamp(edgeSharpness*finalY, minY, maxY);
-					
-			float deltaY = finalY -color.w;	
-			
+
+			float deltaY = finalY -color.w;
+
 			//smooth high contrast input
 			deltaY = clamp(deltaY, -23.0 / 255.0, 23.0 / 255.0);
 
@@ -148,32 +171,129 @@ void main()
 		}
 	}
 
-	if (uVibrance > 0.0)
+	vec3 col = clamp(color.xyz, 0.0, 1.0);
+
+	// Shared 8-tap spatial neighborhood (tight 1.0x cross + wide 2.75x diagonal) drives
+	// atmospheric dehaze, dual-band micro-relief, clarity, tactical shadow lift, micro-bloom, and local HDR.
+	if ((uClarity + uMicroRelief + uDehaze + uShadowLift + uHdr + uGlow) > 0.001)
 	{
-		float sat = max(color.x, max(color.y, color.z)) - min(color.x, min(color.y, color.z));
-		float luma = dot(color.xyz, vec3(0.299, 0.587, 0.114));
-		color.xyz = clamp(vec3(luma) + (color.xyz - vec3(luma)) * (1.0 + uVibrance * (1.0 - sat)), 0.0, 1.0);
+		highp vec2 o1 = ViewportInfo[0].xy;
+		highp vec2 o2 = ViewportInfo[0].xy * 2.75;
+
+		vec3 tN = textureLod(ps0, in_TEXCOORD0.xy + vec2(0.0, -o1.y), 0.0).xyz;
+		vec3 tS = textureLod(ps0, in_TEXCOORD0.xy + vec2(0.0,  o1.y), 0.0).xyz;
+		vec3 tW = textureLod(ps0, in_TEXCOORD0.xy + vec2(-o1.x, 0.0), 0.0).xyz;
+		vec3 tE = textureLod(ps0, in_TEXCOORD0.xy + vec2( o1.x, 0.0), 0.0).xyz;
+		vec3 nearAvg = (tN + tS + tW + tE) * 0.25;
+
+		vec3 tNW = textureLod(ps0, in_TEXCOORD0.xy + vec2(-o2.x, -o2.y), 0.0).xyz;
+		vec3 tNE = textureLod(ps0, in_TEXCOORD0.xy + vec2( o2.x, -o2.y), 0.0).xyz;
+		vec3 tSW = textureLod(ps0, in_TEXCOORD0.xy + vec2(-o2.x,  o2.y), 0.0).xyz;
+		vec3 tSE = textureLod(ps0, in_TEXCOORD0.xy + vec2( o2.x,  o2.y), 0.0).xyz;
+		vec3 wideAvg = (tNW + tNE + tSW + tSE) * 0.25;
+
+		// 1. Dark-channel atmospheric dehaze
+		if (uDehaze > 0.001)
+		{
+			vec3 darkRgb = min(col, min(min(tNW, tNE), min(tSW, tSE)));
+			float darkCh = min(darkRgb.r, min(darkRgb.g, darkRgb.b));
+			float veil = clamp(darkCh * 0.42 * uDehaze, 0.0, 0.45);
+			col = clamp((col - veil) / max(1.0 - veil, 0.55), 0.0, 1.0);
+		}
+
+		// 2. Dual-band micro-texture high-pass relief (suppresses shadow noise & highlight clipping)
+		if (uMicroRelief > 0.001)
+		{
+			vec3 hpFine = col - nearAvg;
+			vec3 hpMed = nearAvg - wideAvg;
+			float lc0 = luma709(col);
+			float reliefMask = clamp(4.0 * lc0 * (1.0 - lc0), 0.15, 1.0);
+			col = clamp(col + (hpFine * 1.15 + hpMed * 0.55) * (uMicroRelief * reliefMask), 0.0, 1.0);
+		}
+
+		// 3. Midtone-protected local clarity
+		if (uClarity > 0.001)
+		{
+			float lc1 = luma709(col);
+			float blurLuma = luma709(wideAvg);
+			float midMask = 1.0 - abs(lc1 * 2.0 - 1.0);
+			col = clamp(col + vec3((lc1 - blurLuma) * uClarity * (0.5 + 0.5 * midMask)), 0.0, 1.0);
+		}
+
+		float localL = luma709(wideAvg);
+
+		// 4. Tactical shadow detail recovery (lifts dark rooms/doorways while keeping bright areas untouched)
+		if (uShadowLift > 0.001)
+		{
+			float lc2 = luma709(col);
+			float shMask = (1.0 - smoothstep(0.0, 0.45, lc2)) * (1.0 - smoothstep(0.05, 0.55, localL));
+			col = clamp(col + col * (shMask * uShadowLift * 0.90) + vec3(0.015 * shMask * uShadowLift), 0.0, 1.0);
+		}
+
+		// 5. Micro-bloom on specular highlights
+		if (uGlow > 0.001)
+		{
+			vec3 bloom = max(wideAvg - 0.58, vec3(0.0)) + max(nearAvg - 0.65, vec3(0.0)) * 0.5;
+			col = col + bloom * (uGlow * 1.25);
+		}
+
+		// 6. Local HDR tone mapping + specular punch + smooth highlight roll-off
+		if (uHdr > 0.001)
+		{
+			float gain = clamp(sqrt(clamp(0.42 / (localL + 0.04), 0.0, 4.0)), 0.90, 1.65);
+			col *= mix(1.0, gain, uHdr * 0.55);
+			float lc3 = luma709(col);
+			float hi = smoothstep(0.60, 1.0, lc3);
+			col += col * hi * uHdr * 0.28;
+			col = mix(col, col / (1.0 + max(col - 0.85, vec3(0.0)) * 1.2), uHdr);
+		}
 	}
 
-	if (uClarity > 0.0)
+	// 7. Exposure, ACES Filmic tone mapping, contrast
+	col *= uExposure;
+	if (uFilmic > 0.001)
 	{
-		// Local contrast: pixel luma minus a wide blur of the source around it (4 bilinear taps, 1.5 texels out).
-		highp vec2 o = ViewportInfo[0].xy * 1.5;
-		vec3 lw = vec3(0.299, 0.587, 0.114);
-		float blurLuma = 0.25 * (dot(textureLod(ps0, in_TEXCOORD0.xy + vec2( o.x,  o.y), 0.0).xyz, lw)
-		                       + dot(textureLod(ps0, in_TEXCOORD0.xy + vec2(-o.x,  o.y), 0.0).xyz, lw)
-		                       + dot(textureLod(ps0, in_TEXCOORD0.xy + vec2( o.x, -o.y), 0.0).xyz, lw)
-		                       + dot(textureLod(ps0, in_TEXCOORD0.xy + vec2(-o.x, -o.y), 0.0).xyz, lw));
-		float d = (dot(color.xyz, lw) - blurLuma) * uClarity;
-		color.xyz = clamp(color.xyz + vec3(d), 0.0, 1.0);
+		col = mix(clamp(col, 0.0, 1.0), acesFilm(max(col, vec3(0.0))), uFilmic);
+	}
+	col = (col - 0.5) * uContrast + 0.5;
+
+	// 8. Split-tone grade (cool teal shadows / warm amber highlights)
+	if (uGrade > 0.001)
+	{
+		float l0 = luma709(col);
+		float shadowsW = 1.0 - smoothstep(0.0, 0.55, l0);
+		float highsW = smoothstep(0.45, 1.0, l0);
+		col += uGrade * (vec3(-0.03, 0.03, 0.08) * shadowsW + vec3(0.08, 0.03, -0.05) * highsW);
 	}
 
+	// 9. Vibrance & saturation
+	if (uVibrance > 0.001)
+	{
+		float satNow = max(col.x, max(col.y, col.z)) - min(col.x, min(col.y, col.z));
+		float lv = luma709(col);
+		col = vec3(lv) + (col - vec3(lv)) * (1.0 + uVibrance * (1.0 - satNow));
+	}
+	col = mix(vec3(luma709(col)), col, uSat);
+
+	// 10. Black point anchor & vignette
+	if (uBlack > 0.001)
+	{
+		float bp = uBlack * 0.07;
+		col = max(col - bp, vec3(0.0)) / (1.0 - bp);
+	}
+	if (uVig > 0.001)
+	{
+		col *= 1.0 - uVig * smoothstep(0.30, 0.80, length(in_TEXCOORD0.xy - 0.5));
+	}
+
+	col = clamp(col, 0.0, 1.0);
+
+	// 11. HyperReal Rec709 33^3 3D LUT
 	if (uLutAmt > 0.0)
 	{
-		highp vec3 lutCoord = color.xyz * uLutMap.x + uLutMap.y;
-		color.xyz = mix(color.xyz, texture(uLut, lutCoord).rgb, uLutAmt);
+		highp vec3 lutCoord = col * uLutMap.x + uLutMap.y;
+		col = mix(col, texture(uLut, lutCoord).rgb, uLutAmt);
 	}
 
-	color.w = 1.0;  //assume alpha channel is not used
-	out_Target0.xyzw = color;
+	out_Target0 = vec4(col, 1.0);
 }

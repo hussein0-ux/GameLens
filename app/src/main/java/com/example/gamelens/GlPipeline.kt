@@ -56,6 +56,9 @@ class GlPipeline(
     private var uChroma = 0
     private var uHdr = 0
     private var uBlack = 0
+    private var uMicroRelief = 0
+    private var uDehaze = 0
+    private var uShadowLift = 0
     private var uBypass = 0
     private var uLut = 0
     private var uLutAmt = 0
@@ -67,8 +70,21 @@ class GlPipeline(
     private var gsrCopyMatrix = 0
     private var gsrCopyTexel = 0
     private var gsrCopyAa = 0
+    private var gsrPs0 = 0
     private var gsrClarity = 0
     private var gsrVibrance = 0
+    private var gsrMicroRelief = 0
+    private var gsrDehaze = 0
+    private var gsrShadowLift = 0
+    private var gsrHdr = 0
+    private var gsrFilmic = 0
+    private var gsrGlow = 0
+    private var gsrExposure = 0
+    private var gsrContrast = 0
+    private var gsrSat = 0
+    private var gsrGrade = 0
+    private var gsrBlack = 0
+    private var gsrVig = 0
     private var gsrVi = 0
     private var gsrEdge = 0
     private var gsrLut = 0
@@ -84,9 +100,24 @@ class GlPipeline(
     private var upMatrix = 0
     private var upTexel = 0
     private var upSharp = 0
+    private var upClarity = 0
+    private var upVibrance = 0
+    private var upMicroRelief = 0
+    private var upDehaze = 0
+    private var upShadowLift = 0
+    private var upHdr = 0
+    private var upFilmic = 0
+    private var upGlow = 0
+    private var upExposure = 0
+    private var upContrast = 0
+    private var upSat = 0
+    private var upGrade = 0
+    private var upBlack = 0
+    private var upVig = 0
     private var upLut = 0
     private var upLutAmt = 0
     private var upLutMap = 0
+    private val eglSize = IntArray(1)
 
     // 3D colour LUT (loaded once from assets; 0 means "not available", the shader step is then skipped).
     private var lutTex = 0
@@ -232,8 +263,23 @@ class GlPipeline(
         EGL14.eglChooseConfig(eglDisplay, cfgAttribs, 0, configs, 0, 1, num, 0)
         check(num[0] > 0) { "No EGL config" }
 
+        val ext = EGL14.eglQueryString(eglDisplay, EGL14.EGL_EXTENSIONS) ?: ""
+        val highPrioAttribs = intArrayOf(
+            EGL14.EGL_CONTEXT_CLIENT_VERSION, 3,
+            0x3100, 0x3101, // EGL_CONTEXT_PRIORITY_LEVEL_IMG = EGL_CONTEXT_PRIORITY_HIGH_IMG
+            EGL14.EGL_NONE,
+        )
         val ctxAttribs = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE)
-        eglContext = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, ctxAttribs, 0)
+        var ctx = if (ext.contains("EGL_IMG_context_priority")) {
+            EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, highPrioAttribs, 0)
+        } else {
+            EGL14.EGL_NO_CONTEXT
+        }
+        if (ctx == null || ctx == EGL14.EGL_NO_CONTEXT) {
+            ctx = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, ctxAttribs, 0)
+        }
+        check(ctx != null && ctx != EGL14.EGL_NO_CONTEXT) { "eglCreateContext failed" }
+        eglContext = ctx
         eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, configs[0], outSurface, intArrayOf(EGL14.EGL_NONE), 0)
         check(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) { "eglMakeCurrent failed" }
         EGL14.eglSwapInterval(eglDisplay, 1)
@@ -275,6 +321,9 @@ class GlPipeline(
         uChroma = GLES30.glGetUniformLocation(program, "uChroma")
         uHdr = GLES30.glGetUniformLocation(program, "uHdr")
         uBlack = GLES30.glGetUniformLocation(program, "uBlack")
+        uMicroRelief = GLES30.glGetUniformLocation(program, "uMicroRelief")
+        uDehaze = GLES30.glGetUniformLocation(program, "uDehaze")
+        uShadowLift = GLES30.glGetUniformLocation(program, "uShadowLift")
         uBypass = GLES30.glGetUniformLocation(program, "uBypass")
         uLut = GLES30.glGetUniformLocation(program, "uLut")
         uLutAmt = GLES30.glGetUniformLocation(program, "uLutAmt")
@@ -287,6 +336,20 @@ class GlPipeline(
         upMatrix = GLES30.glGetUniformLocation(upProgram, "uStMatrix")
         upTexel = GLES30.glGetUniformLocation(upProgram, "uTexel")
         upSharp = GLES30.glGetUniformLocation(upProgram, "uSharp")
+        upClarity = GLES30.glGetUniformLocation(upProgram, "uClarity")
+        upVibrance = GLES30.glGetUniformLocation(upProgram, "uVibrance")
+        upMicroRelief = GLES30.glGetUniformLocation(upProgram, "uMicroRelief")
+        upDehaze = GLES30.glGetUniformLocation(upProgram, "uDehaze")
+        upShadowLift = GLES30.glGetUniformLocation(upProgram, "uShadowLift")
+        upHdr = GLES30.glGetUniformLocation(upProgram, "uHdr")
+        upFilmic = GLES30.glGetUniformLocation(upProgram, "uFilmic")
+        upGlow = GLES30.glGetUniformLocation(upProgram, "uGlow")
+        upExposure = GLES30.glGetUniformLocation(upProgram, "uExposure")
+        upContrast = GLES30.glGetUniformLocation(upProgram, "uContrast")
+        upSat = GLES30.glGetUniformLocation(upProgram, "uSat")
+        upGrade = GLES30.glGetUniformLocation(upProgram, "uGrade")
+        upBlack = GLES30.glGetUniformLocation(upProgram, "uBlack")
+        upVig = GLES30.glGetUniformLocation(upProgram, "uVig")
         upLut = GLES30.glGetUniformLocation(upProgram, "uLut")
         upLutAmt = GLES30.glGetUniformLocation(upProgram, "uLutAmt")
         upLutMap = GLES30.glGetUniformLocation(upProgram, "uLutMap")
@@ -373,11 +436,10 @@ class GlPipeline(
         surfaceTexture.updateTexImage()
         surfaceTexture.getTransformMatrix(stMatrix)
 
-        val sz = IntArray(1)
-        EGL14.eglQuerySurface(eglDisplay, eglSurface, EGL14.EGL_WIDTH, sz, 0)
-        val outW = sz[0]
-        EGL14.eglQuerySurface(eglDisplay, eglSurface, EGL14.EGL_HEIGHT, sz, 0)
-        val outH = sz[0]
+        EGL14.eglQuerySurface(eglDisplay, eglSurface, EGL14.EGL_WIDTH, eglSize, 0)
+        val outW = eglSize[0]
+        EGL14.eglQuerySurface(eglDisplay, eglSurface, EGL14.EGL_HEIGHT, eglSize, 0)
+        val outH = eglSize[0]
 
         val mode = LookSettings.mode
         if (mode < LookSettings.MODE_NEURAL && (neural != null || lastMode >= LookSettings.MODE_NEURAL)) {
@@ -429,6 +491,9 @@ class GlPipeline(
         GLES30.glUniform1f(uChroma, LookSettings.chroma)
         GLES30.glUniform1f(uHdr, LookSettings.hdr)
         GLES30.glUniform1f(uBlack, LookSettings.blackPt)
+        GLES30.glUniform1f(uMicroRelief, LookSettings.microRelief)
+        GLES30.glUniform1f(uDehaze, LookSettings.dehaze)
+        GLES30.glUniform1f(uShadowLift, LookSettings.shadowLift)
 
         GLES30.glUniformMatrix4fv(uMatrix, 1, false, stMatrix, 0)
         GLES30.glUniform2f(uTexel, 1f / width, 1f / height)
@@ -486,14 +551,22 @@ class GlPipeline(
         GLES30.glUniformMatrix4fv(upMatrix, 1, false, stMatrix, 0)
         GLES30.glUniform2f(upTexel, 1f / width, 1f / height)
         GLES30.glUniform1f(upSharp, LookSettings.upSharp)
+        GLES30.glUniform1f(upClarity, LookSettings.upClarity)
+        GLES30.glUniform1f(upVibrance, LookSettings.upVibrance)
+        GLES30.glUniform1f(upMicroRelief, LookSettings.microRelief)
+        GLES30.glUniform1f(upDehaze, LookSettings.dehaze)
+        GLES30.glUniform1f(upShadowLift, LookSettings.shadowLift)
+        GLES30.glUniform1f(upHdr, LookSettings.hdr)
+        GLES30.glUniform1f(upFilmic, LookSettings.filmic)
+        GLES30.glUniform1f(upGlow, LookSettings.glow)
+        GLES30.glUniform1f(upExposure, LookSettings.exposure)
+        GLES30.glUniform1f(upContrast, LookSettings.contrast)
+        GLES30.glUniform1f(upSat, LookSettings.saturation)
+        GLES30.glUniform1f(upGrade, LookSettings.grade)
+        GLES30.glUniform1f(upBlack, LookSettings.blackPt)
+        GLES30.glUniform1f(upVig, LookSettings.vignette)
 
-        quad.position(0)
-        GLES30.glVertexAttribPointer(0, 2, GLES30.GL_FLOAT, false, 16, quad)
-        GLES30.glEnableVertexAttribArray(0)
-        quad.position(2)
-        GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, 16, quad)
-        GLES30.glEnableVertexAttribArray(1)
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        drawQuad()
 
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
         dgDrawn++
@@ -513,6 +586,7 @@ class GlPipeline(
             gsrCopyMatrix = GLES30.glGetUniformLocation(gsrCopyProgram, "uStMatrix")
             gsrCopyTexel = GLES30.glGetUniformLocation(gsrCopyProgram, "uTexel")
             gsrCopyAa = GLES30.glGetUniformLocation(gsrCopyProgram, "uAa")
+            gsrPs0 = GLES30.glGetUniformLocation(gsrProgram, "ps0")
             gsrVi = GLES30.glGetUniformLocation(gsrProgram, "ViewportInfo")
             gsrEdge = GLES30.glGetUniformLocation(gsrProgram, "uEdgeSharpness")
             gsrLut = GLES30.glGetUniformLocation(gsrProgram, "uLut")
@@ -520,6 +594,18 @@ class GlPipeline(
             gsrLutMap = GLES30.glGetUniformLocation(gsrProgram, "uLutMap")
             gsrClarity = GLES30.glGetUniformLocation(gsrProgram, "uClarity")
             gsrVibrance = GLES30.glGetUniformLocation(gsrProgram, "uVibrance")
+            gsrMicroRelief = GLES30.glGetUniformLocation(gsrProgram, "uMicroRelief")
+            gsrDehaze = GLES30.glGetUniformLocation(gsrProgram, "uDehaze")
+            gsrShadowLift = GLES30.glGetUniformLocation(gsrProgram, "uShadowLift")
+            gsrHdr = GLES30.glGetUniformLocation(gsrProgram, "uHdr")
+            gsrFilmic = GLES30.glGetUniformLocation(gsrProgram, "uFilmic")
+            gsrGlow = GLES30.glGetUniformLocation(gsrProgram, "uGlow")
+            gsrExposure = GLES30.glGetUniformLocation(gsrProgram, "uExposure")
+            gsrContrast = GLES30.glGetUniformLocation(gsrProgram, "uContrast")
+            gsrSat = GLES30.glGetUniformLocation(gsrProgram, "uSat")
+            gsrGrade = GLES30.glGetUniformLocation(gsrProgram, "uGrade")
+            gsrBlack = GLES30.glGetUniformLocation(gsrProgram, "uBlack")
+            gsrVig = GLES30.glGetUniformLocation(gsrProgram, "uVig")
         } catch (t: Throwable) {
             gsrProgram = 0
             gsrCopyProgram = 0
@@ -565,11 +651,23 @@ class GlPipeline(
         GLES30.glViewport(0, 0, outW, outH)
         GLES30.glUseProgram(gsrProgram)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, gsrTex[0])
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(gsrProgram, "ps0"), 0)
+        GLES30.glUniform1i(gsrPs0, 0)
         GLES30.glUniform4f(gsrVi, 1f / gsrW, 1f / gsrH, gsrW.toFloat(), gsrH.toFloat())
         GLES30.glUniform1f(gsrEdge, 1f + LookSettings.upSharp)
         GLES30.glUniform1f(gsrClarity, LookSettings.upClarity)
         GLES30.glUniform1f(gsrVibrance, LookSettings.upVibrance)
+        GLES30.glUniform1f(gsrMicroRelief, LookSettings.microRelief)
+        GLES30.glUniform1f(gsrDehaze, LookSettings.dehaze)
+        GLES30.glUniform1f(gsrShadowLift, LookSettings.shadowLift)
+        GLES30.glUniform1f(gsrHdr, LookSettings.hdr)
+        GLES30.glUniform1f(gsrFilmic, LookSettings.filmic)
+        GLES30.glUniform1f(gsrGlow, LookSettings.glow)
+        GLES30.glUniform1f(gsrExposure, LookSettings.exposure)
+        GLES30.glUniform1f(gsrContrast, LookSettings.contrast)
+        GLES30.glUniform1f(gsrSat, LookSettings.saturation)
+        GLES30.glUniform1f(gsrGrade, LookSettings.grade)
+        GLES30.glUniform1f(gsrBlack, LookSettings.blackPt)
+        GLES30.glUniform1f(gsrVig, LookSettings.vignette)
         GLES30.glUniform1i(gsrLut, 2)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTex)
@@ -822,7 +920,7 @@ out vec4 outColor;
 void main() { outColor = vec4(texture(uTex2, gl_FragCoord.xy / uRes).rgb, 1.0); }
 """
 
-        // Fast path: Catmull-Rom 2x upscale (9 bilinear fetches), deringing clamp, adaptive sharpen, HyperReal LUT.
+        // Fast path: Catmull-Rom 2x upscale (9 bilinear fetches), deringing clamp, CAS sharpen + fused HyperReal pass + LUT.
         private const val UPSCALE_FRAGMENT_SRC = """#version 300 es
 #extension GL_OES_EGL_image_external_essl3 : require
 precision highp float;
@@ -830,6 +928,20 @@ precision highp float;
 uniform samplerExternalOES uTex;
 uniform vec2 uTexel;
 uniform float uSharp;
+uniform float uClarity;
+uniform float uVibrance;
+uniform float uMicroRelief;
+uniform float uDehaze;
+uniform float uShadowLift;
+uniform float uHdr;
+uniform float uFilmic;
+uniform float uGlow;
+uniform float uExposure;
+uniform float uContrast;
+uniform float uSat;
+uniform float uGrade;
+uniform float uBlack;
+uniform float uVig;
 uniform highp sampler3D uLut;
 uniform float uLutAmt;
 uniform vec2 uLutMap;
@@ -838,6 +950,11 @@ in vec2 vUv;
 out vec4 outColor;
 
 vec3 tex(vec2 p) { return texture(uTex, p).rgb; }
+float luma709(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 acesFilm(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
 
 void main() {
     vec2 size = 1.0 / uTexel;
@@ -863,7 +980,7 @@ void main() {
            + tex(vec2(p12.x, p3.y)) * w12.x * w3.y
            + tex(vec2(p3.x, p3.y)) * w3.x * w3.y;
 
-    // Neighbours one output pixel away (half a source texel at 2x): used for deringing and sharpening.
+    // Neighbours one output pixel away (half a source texel at 2x): used for deringing, sharpening, and micro-relief.
     vec2 d = 0.5 * uTexel;
     vec3 n = tex(vUv + vec2(0.0, -d.y));
     vec3 s = tex(vUv + vec2(0.0,  d.y));
@@ -876,9 +993,74 @@ void main() {
 
     // Contrast-adaptive sharpen (same idea as CAS): less where the local range is already high.
     vec3 amp = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, vec3(1e-4)), 0.0, 1.0));
-    vec3 avg = (n + s + w + e) * 0.25;
-    vec3 col = clamp(c + (c - avg) * uSharp * amp * 2.0, 0.0, 1.0);
+    vec3 nearAvg = (n + s + w + e) * 0.25;
+    vec3 col = clamp(c + (c - nearAvg) * uSharp * amp * 2.0, 0.0, 1.0);
 
+    if ((uClarity + uMicroRelief + uDehaze + uShadowLift + uHdr + uGlow) > 0.001) {
+        vec2 o2 = uTexel * 2.75;
+        vec3 tNW = tex(vUv + vec2(-o2.x, -o2.y));
+        vec3 tNE = tex(vUv + vec2( o2.x, -o2.y));
+        vec3 tSW = tex(vUv + vec2(-o2.x,  o2.y));
+        vec3 tSE = tex(vUv + vec2( o2.x,  o2.y));
+        vec3 wideAvg = (tNW + tNE + tSW + tSE) * 0.25;
+
+        if (uDehaze > 0.001) {
+            vec3 darkRgb = min(col, min(min(tNW, tNE), min(tSW, tSE)));
+            float darkCh = min(darkRgb.r, min(darkRgb.g, darkRgb.b));
+            float veil = clamp(darkCh * 0.42 * uDehaze, 0.0, 0.45);
+            col = clamp((col - veil) / max(1.0 - veil, 0.55), 0.0, 1.0);
+        }
+        if (uMicroRelief > 0.001) {
+            vec3 hpFine = col - nearAvg;
+            vec3 hpMed = nearAvg - wideAvg;
+            float lc0 = luma709(col);
+            float reliefMask = clamp(4.0 * lc0 * (1.0 - lc0), 0.15, 1.0);
+            col = clamp(col + (hpFine * 1.15 + hpMed * 0.55) * (uMicroRelief * reliefMask), 0.0, 1.0);
+        }
+        if (uClarity > 0.001) {
+            float lc1 = luma709(col);
+            float midMask = 1.0 - abs(lc1 * 2.0 - 1.0);
+            col = clamp(col + vec3((lc1 - luma709(wideAvg)) * uClarity * (0.5 + 0.5 * midMask)), 0.0, 1.0);
+        }
+        float localL = luma709(wideAvg);
+        if (uShadowLift > 0.001) {
+            float lc2 = luma709(col);
+            float shMask = (1.0 - smoothstep(0.0, 0.45, lc2)) * (1.0 - smoothstep(0.05, 0.55, localL));
+            col = clamp(col + col * (shMask * uShadowLift * 0.90) + vec3(0.015 * shMask * uShadowLift), 0.0, 1.0);
+        }
+        if (uGlow > 0.001) {
+            vec3 bloom = max(wideAvg - 0.58, vec3(0.0)) + max(nearAvg - 0.65, vec3(0.0)) * 0.5;
+            col = col + bloom * (uGlow * 1.25);
+        }
+        if (uHdr > 0.001) {
+            float gain = clamp(sqrt(clamp(0.42 / (localL + 0.04), 0.0, 4.0)), 0.90, 1.65);
+            col *= mix(1.0, gain, uHdr * 0.55);
+            float lc3 = luma709(col);
+            col += col * smoothstep(0.60, 1.0, lc3) * uHdr * 0.28;
+            col = mix(col, col / (1.0 + max(col - 0.85, vec3(0.0)) * 1.2), uHdr);
+        }
+    }
+
+    col *= uExposure;
+    if (uFilmic > 0.001) col = mix(clamp(col, 0.0, 1.0), acesFilm(max(col, vec3(0.0))), uFilmic);
+    col = (col - 0.5) * uContrast + 0.5;
+    if (uGrade > 0.001) {
+        float l0 = luma709(col);
+        col += uGrade * (vec3(-0.03, 0.03, 0.08) * (1.0 - smoothstep(0.0, 0.55, l0))
+                       + vec3( 0.08, 0.03,-0.05) * smoothstep(0.45, 1.0, l0));
+    }
+    if (uVibrance > 0.001) {
+        float satNow = max(col.x, max(col.y, col.z)) - min(col.x, min(col.y, col.z));
+        float lv = luma709(col);
+        col = vec3(lv) + (col - vec3(lv)) * (1.0 + uVibrance * (1.0 - satNow));
+    }
+    col = mix(vec3(luma709(col)), col, uSat);
+    if (uBlack > 0.001) {
+        float bp = uBlack * 0.07;
+        col = max(col - bp, vec3(0.0)) / (1.0 - bp);
+    }
+    if (uVig > 0.001) col *= 1.0 - uVig * smoothstep(0.30, 0.80, length(vUv - 0.5));
+    col = clamp(col, 0.0, 1.0);
     if (uLutAmt > 0.0) col = mix(col, texture(uLut, col * uLutMap.x + uLutMap.y).rgb, uLutAmt);
     outColor = vec4(col, 1.0);
 }
@@ -937,6 +1119,9 @@ uniform float uVig;
 uniform float uChroma;
 uniform float uHdr;
 uniform float uBlack;
+uniform float uMicroRelief;
+uniform float uDehaze;
+uniform float uShadowLift;
 uniform float uBypass;
 uniform highp sampler3D uLut;
 uniform float uLutAmt;
@@ -981,11 +1166,39 @@ void main() {
     vec3 sharp = (e + (n + s + w + ea) * wgt) / (1.0 + 4.0 * wgt);
     vec3 col = mix(e, sharp, step(0.001, uSharp));
 
-    // Clarity: boost mid-frequency detail using a wider 4-tap blur.
+    vec3 nearAvg = (n + s + w + ea) * 0.25;
     vec3 blur = (tap(vec2(-2.0, 0.0)) + tap(vec2(2.0, 0.0)) + tap(vec2(0.0, -2.0)) + tap(vec2(0.0, 2.0))) * 0.25;
+
+    // Dark-channel atmospheric dehaze
+    if (uDehaze > 0.001) {
+        vec3 nwD = tap(vec2(-3.0, -3.0));
+        vec3 seD = tap(vec2( 3.0,  3.0));
+        vec3 dRgb = min(col, min(nwD, seD));
+        float veil = clamp(min(dRgb.r, min(dRgb.g, dRgb.b)) * 0.42 * uDehaze, 0.0, 0.45);
+        col = clamp((col - veil) / max(1.0 - veil, 0.55), 0.0, 1.0);
+    }
+
+    // Dual-band micro-relief
+    if (uMicroRelief > 0.001) {
+        vec3 hpFine = col - nearAvg;
+        vec3 hpMed = nearAvg - blur;
+        float lcR = luma(col);
+        float rMask = clamp(4.0 * lcR * (1.0 - lcR), 0.15, 1.0);
+        col = clamp(col + (hpFine * 1.15 + hpMed * 0.55) * (uMicroRelief * rMask), 0.0, 1.0);
+    }
+
+    // Clarity: boost mid-frequency detail using a wider 4-tap blur.
     float midMask = 1.0 - abs(luma(col) * 2.0 - 1.0); // protect pure blacks and whites
     col += (col - blur) * uClarity * (0.5 + 0.5 * midMask);
     col = clamp(col, 0.0, 1.0);
+
+    // Tactical shadow detail recovery
+    if (uShadowLift > 0.001) {
+        float lcS = luma(col);
+        float locS = luma(blur);
+        float shMask = (1.0 - smoothstep(0.0, 0.45, lcS)) * (1.0 - smoothstep(0.05, 0.55, locS));
+        col = clamp(col + col * (shMask * uShadowLift * 0.90) + vec3(0.015 * shMask * uShadowLift), 0.0, 1.0);
+    }
 
     // Glow: bleed bright areas outward (8 taps) for a soft HDR-style bloom.
     vec3 glowAcc = vec3(0.0);
@@ -1021,10 +1234,9 @@ void main() {
         col = mix(col, col / (1.0 + max(col - 0.85, 0.0) * 1.2), uHdr);
     }
 
-    // Exposure + gentle S-curve: keeps midtones where they were, adds punch.
+    // Exposure + ACES Filmic curve + contrast.
     col *= uExposure;
-    vec3 curved = clamp(col * col * (3.0 - 2.0 * col), 0.0, 1.0);
-    col = mix(clamp(col, 0.0, 1.0), curved, uFilmic);
+    col = mix(clamp(col, 0.0, 1.0), aces(max(col, vec3(0.0))), uFilmic);
     col = (col - 0.5) * uContrast + 0.5;
 
     // Split-tone grade: cool teal in the shadows, warm orange in the highlights.

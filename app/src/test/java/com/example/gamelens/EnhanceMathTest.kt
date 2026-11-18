@@ -157,4 +157,69 @@ class EnhanceMathTest {
         assertEquals(true, bright[0] > 0.6f)
         assertEquals(true, dark[0] < 0.4f)
     }
+
+    private fun dehaze(c: FloatArray, darkCh: Float, amount: Float): FloatArray {
+        if (amount <= 0.001f) return c
+        val veil = (darkCh * 0.42f * amount).coerceIn(0f, 0.45f)
+        val denom = max(1f - veil, 0.55f)
+        return FloatArray(3) { ((c[it] - veil) / denom).coerceIn(0f, 1f) }
+    }
+
+    private fun microRelief(c: FloatArray, nearAvg: FloatArray, wideAvg: FloatArray, amount: Float): FloatArray {
+        val lc = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]
+        val mask = (4f * lc * (1f - lc)).coerceIn(0.15f, 1f)
+        return FloatArray(3) { i ->
+            val hpFine = c[i] - nearAvg[i]
+            val hpMed = nearAvg[i] - wideAvg[i]
+            (c[i] + (hpFine * 1.15f + hpMed * 0.55f) * amount * mask).coerceIn(0f, 1f)
+        }
+    }
+
+    private fun shadowLift(c: FloatArray, localL: Float, amount: Float): FloatArray {
+        val lc = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]
+        fun smoothstep(e0: Float, e1: Float, x: Float): Float {
+            val t = ((x - e0) / (e1 - e0)).coerceIn(0f, 1f)
+            return t * t * (3f - 2f * t)
+        }
+        val shMask = (1f - smoothstep(0f, 0.45f, lc)) * (1f - smoothstep(0.05f, 0.55f, localL))
+        return FloatArray(3) { (c[it] + c[it] * (shMask * amount * 0.90f) + 0.015f * shMask * amount).coerceIn(0f, 1f) }
+    }
+
+    private fun acesFilm(x: FloatArray): FloatArray = FloatArray(3) { i ->
+        val v = x[i].coerceAtLeast(0f)
+        ((v * (2.51f * v + 0.03f)) / (v * (2.43f * v + 0.59f) + 0.14f)).coerceIn(0f, 1f)
+    }
+
+    @Test fun dehazeStripsHazeAndZeroIsIdentity() {
+        val hazy = floatArrayOf(0.55f, 0.58f, 0.62f)
+        val same = dehaze(hazy, 0.50f, 0f)
+        for (i in 0..2) assertEquals(hazy[i], same[i], 1e-6f)
+        val clear = dehaze(hazy, 0.50f, 0.5f)
+        assertEquals(true, clear[0] < hazy[0])
+        assertEquals(true, (clear[2] - clear[0]) > (hazy[2] - hazy[0]))
+    }
+
+    @Test fun microReliefBoostsDetailInMidtonesWhileClampingRange() {
+        val px = floatArrayOf(0.52f, 0.50f, 0.48f)
+        val near = floatArrayOf(0.45f, 0.45f, 0.45f)
+        val wide = floatArrayOf(0.42f, 0.42f, 0.42f)
+        val out = microRelief(px, near, wide, 0.72f)
+        assertEquals(true, out[0] > px[0])
+        assertEquals(true, out[0] <= 1f)
+    }
+
+    @Test fun shadowLiftRecoversDarkInteriorsWithoutBlowingHighlights() {
+        val dark = floatArrayOf(0.10f, 0.12f, 0.11f)
+        val liftedDark = shadowLift(dark, 0.12f, 0.42f)
+        assertEquals(true, liftedDark[0] > dark[0])
+
+        val bright = floatArrayOf(0.85f, 0.85f, 0.85f)
+        val untouchedBright = shadowLift(bright, 0.80f, 0.42f)
+        for (i in 0..2) assertEquals(bright[i], untouchedBright[i], 1e-6f)
+    }
+
+    @Test fun acesFilmRollsOffHighlightsSmoothlyInUnitRange() {
+        val over = acesFilm(floatArrayOf(1.6f, 1.2f, 0.9f))
+        assertEquals(true, over[0] < 1.0f && over[0] > over[1] && over[1] > over[2])
+    }
 }

@@ -2,30 +2,30 @@ package com.example.gamelens
 
 import android.Manifest
 import android.content.Intent
+import android.media.projection.MediaProjectionManager
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.OpenableColumns
-import android.view.View
-import android.widget.CheckBox
-import android.widget.RadioButton
-import android.widget.RadioGroup
-import java.io.File
-import java.util.zip.ZipInputStream
-import android.media.projection.MediaProjectionManager
-import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
+import java.util.Locale
+import java.util.zip.ZipInputStream
 
-/** Minimal programmatic UI: start/stop, look presets and live look sliders. */
+/** Minimal programmatic UI: start/stop, Snapdragon 8 Gen 3 120Hz HyperReal presets, and live look sliders. */
 class MainActivity : ComponentActivity() {
 
     private val capturePermission =
@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
             val data = res.data
             if (res.resultCode == RESULT_OK && data != null) {
                 CaptureService.start(this, res.resultCode, data)
-                Toast.makeText(this, "Now open your game", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Now open Call of Duty: Mobile", Toast.LENGTH_LONG).show()
             }
         }
 
@@ -47,12 +47,20 @@ class MainActivity : ComponentActivity() {
 
     private val ui = Handler(Looper.getMainLooper())
     private var statsView: TextView? = null
+    private var budgetView: TextView? = null
     private var aiModelLabel: TextView? = null
+    private var modeGroup: RadioGroup? = null
+    private var upscalerGroup: RadioGroup? = null
+    private var captureHalfBox: CheckBox? = null
+    private var lock120Box: CheckBox? = null
+    private var bypassBox: CheckBox? = null
+
     private val statsTick = object : Runnable {
         override fun run() {
             val st = AiSettings.stats
             val dg = AiSettings.diag
             statsView?.text = AiSettings.status + (if (st.isNotEmpty()) "\n$st" else "") + (if (dg.isNotEmpty()) "\n$dg" else "")
+            updateBudget()
             ui.postDelayed(this, 500)
         }
     }
@@ -75,13 +83,20 @@ class MainActivity : ComponentActivity() {
             textSize = 26f
         })
         root.addView(TextView(this).apply {
-            text = "Build 0.5 - Crisp default, HDR look, crash log"
+            text = "Build 0.6 - Snapdragon 8 Gen 3 (Adreno 750) 120Hz HyperReal"
             textSize = 12f
         })
         root.addView(TextView(this).apply {
-            text = "Real-time sharpening, grading and glow for your game.\n" +
-                "When Android asks what to share, choose \"A single app\" and pick your game."
+            text = "Real-time Qualcomm GSR upscale, micro-relief, dehaze, HDR tone mapping & LUT.\n" +
+                "For CoD Mobile 120fps: set in-game Frame Rate = Ultra, choose \"A single app\" when sharing."
         })
+
+        budgetView = TextView(this).apply {
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 11f
+            setPadding(0, pad / 2, 0, pad / 2)
+        }
+        root.addView(budgetView)
 
         val crashFile = GameLensApp.crashFile(this)
         if (crashFile.exists() && crashFile.length() > 0) {
@@ -98,7 +113,7 @@ class MainActivity : ComponentActivity() {
                     val cm = getSystemService(android.content.ClipboardManager::class.java)
                     cm.setPrimaryClip(android.content.ClipData.newPlainText("GameLens crash", log))
                     crashFile.delete()
-                    Toast.makeText(this@MainActivity, "Copied. Paste it to Claude.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "Copied crash log.", Toast.LENGTH_LONG).show()
                 }
             })
         }
@@ -111,87 +126,113 @@ class MainActivity : ComponentActivity() {
             text = "Stop"
             setOnClickListener { CaptureService.stop(this@MainActivity) }
         })
+        root.addView(Button(this).apply {
+            text = "SD 8 Gen 3 · CoD Mobile 120Hz Extreme"
+            setOnClickListener {
+                LookSettings.applySd8Gen3Hyper120()
+                syncAllControls()
+                Toast.makeText(this@MainActivity, "8 Gen 3 120Hz Extreme HyperReal active", Toast.LENGTH_SHORT).show()
+            }
+        })
 
         addAiSection(root, pad)
 
         val presets = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        fun presetButton(label: String, p: LookSettings.Preset) {
-            presets.addView(
+        fun presetButton(row: LinearLayout, label: String, p: LookSettings.Preset) {
+            row.addView(
                 Button(this).apply {
                     text = label
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     setOnClickListener {
                         LookSettings.apply(p)
                         refreshers.forEach { it() }
+                        updateBudget()
                     }
                 }
             )
         }
-        presetButton("Natural", LookSettings.NATURAL)
-        presetButton("Vivid", LookSettings.VIVID)
-        presetButton("Cinematic", LookSettings.CINEMATIC)
-        presetButton("Montage", LookSettings.MONTAGE)
+        presetButton(presets, "Natural", LookSettings.NATURAL)
+        presetButton(presets, "Vivid", LookSettings.VIVID)
+        presetButton(presets, "Cinematic", LookSettings.CINEMATIC)
+        presetButton(presets, "Montage", LookSettings.MONTAGE)
         root.addView(presets)
+
         val presets2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        presets2.addView(Button(this).apply {
-            text = "HDR Pop"
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { LookSettings.apply(LookSettings.HDR_POP); refreshers.forEach { it() } }
-        })
-        presets2.addView(Button(this).apply {
-            text = "Crisp"
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { LookSettings.apply(LookSettings.CRISP); refreshers.forEach { it() } }
-        })
+        presetButton(presets2, "HDR Pop", LookSettings.HDR_POP)
+        presetButton(presets2, "Crisp", LookSettings.CRISP)
+        presetButton(presets2, "8 Gen 3 Extreme", LookSettings.SD8_GEN3_HYPER)
         root.addView(presets2)
 
         root.addView(TextView(this).apply { text = "Mode" })
-        radioGroup(
+        modeGroup = radioGroup(
             root,
             listOf(
                 "Look filters only (heavy, no upscale)",
-                "GPU upscale + LUT (fast)",
-                "Neural upscale + LUT (needs a model and a 1170x540 game)",
-                "Auto: neural, falls back to GPU if it cannot hold the frame rate",
+                "GPU upscale + fused HyperReal + LUT (120Hz)",
+                "Neural upscale + LUT (needs model matching capture size)",
+                "Auto: neural, falls back to GPU if it drops below 110fps",
             ),
             LookSettings.mode,
-        ) { i -> LookSettings.mode = i }
-        root.addView(CheckBox(this).apply {
-            text = "Capture at half screen size (applies on next start)"
+        ) { i ->
+            LookSettings.mode = i
+            updateBudget()
+        }
+        captureHalfBox = CheckBox(this).apply {
+            text = "Capture at half screen size (CoD Mobile 120Hz, next start)"
             isChecked = LookSettings.captureHalf
-            setOnCheckedChangeListener { _, c -> LookSettings.captureHalf = c }
-        })
+            setOnCheckedChangeListener { _, c ->
+                LookSettings.captureHalf = c
+                updateBudget()
+            }
+        }
+        root.addView(captureHalfBox)
+        lock120Box = CheckBox(this).apply {
+            text = "Lock overlay surface to 120 Hz (next start)"
+            isChecked = LookSettings.target120Hz
+            setOnCheckedChangeListener { _, c -> LookSettings.target120Hz = c }
+        }
+        root.addView(lock120Box)
+
         root.addView(TextView(this).apply { text = "GPU upscaler" })
-        radioGroup(
+        upscalerGroup = radioGroup(
             root,
-            listOf("Qualcomm GSR (edge-directed, made for games)", "Catmull-Rom + sharpen"),
+            listOf("Catmull-Rom + CAS + HyperReal", "Qualcomm GSR (edge-directed, made for games)"),
             LookSettings.upscaler,
-        ) { i -> LookSettings.upscaler = i }
+        ) { i ->
+            LookSettings.upscaler = i
+            updateBudget()
+        }
         slider(root, "Upscale sharpness", 0f, 1f, { LookSettings.upSharp }) { LookSettings.upSharp = it }
-        slider(root, "Edge anti-aliasing (GSR only)", 0f, 1f, { LookSettings.aa }) { LookSettings.aa = it }
-        slider(root, "Enhance clarity (GSR only)", 0f, 1f, { LookSettings.upClarity }) { LookSettings.upClarity = it }
-        slider(root, "Enhance vibrance (GSR only)", 0f, 1f, { LookSettings.upVibrance }) { LookSettings.upVibrance = it }
-        root.addView(CheckBox(this).apply {
+        slider(root, "Edge anti-aliasing (GSR pre-pass)", 0f, 1f, { LookSettings.aa }) { LookSettings.aa = it; updateBudget() }
+        slider(root, "Upscale clarity (GPU mode)", 0f, 1f, { LookSettings.upClarity }) { LookSettings.upClarity = it; updateBudget() }
+        slider(root, "Upscale vibrance (GPU mode)", 0f, 1f, { LookSettings.upVibrance }) { LookSettings.upVibrance = it }
+        bypassBox = CheckBox(this).apply {
             text = "Bypass look (raw capture-rate test)"
             isChecked = LookSettings.bypass
             setOnCheckedChangeListener { _, c -> LookSettings.bypass = c }
-        })
+        }
+        root.addView(bypassBox)
+
         slider(root, "LUT strength (HyperReal)", 0f, 1f, { LookSettings.lut }) { LookSettings.lut = it }
-        slider(root, "Sharpen", 0f, 1f, { LookSettings.sharpen }) { LookSettings.sharpen = it }
-        slider(root, "Clarity", 0f, 1f, { LookSettings.clarity }) { LookSettings.clarity = it }
+        slider(root, "Micro-texture relief (8 Gen 3)", 0f, 1f, { LookSettings.microRelief }) { LookSettings.microRelief = it; updateBudget() }
+        slider(root, "Atmospheric dehaze", 0f, 1f, { LookSettings.dehaze }) { LookSettings.dehaze = it; updateBudget() }
+        slider(root, "Shadow detail recovery", 0f, 1f, { LookSettings.shadowLift }) { LookSettings.shadowLift = it; updateBudget() }
+        slider(root, "HDR local tone & punch", 0f, 1f, { LookSettings.hdr }) { LookSettings.hdr = it; updateBudget() }
+        slider(root, "ACES Filmic tone curve", 0f, 1f, { LookSettings.filmic }) { LookSettings.filmic = it }
         slider(root, "Exposure", 0.8f, 1.4f, { LookSettings.exposure }) { LookSettings.exposure = it }
         slider(root, "Contrast", 0.8f, 1.4f, { LookSettings.contrast }) { LookSettings.contrast = it }
         slider(root, "Saturation", 0.5f, 1.6f, { LookSettings.saturation }) { LookSettings.saturation = it }
-        slider(root, "Vibrance", 0f, 1f, { LookSettings.vibrance }) { LookSettings.vibrance = it }
-        slider(root, "Tone curve", 0f, 1f, { LookSettings.filmic }) { LookSettings.filmic = it }
         slider(root, "Teal/orange grade", 0f, 1f, { LookSettings.grade }) { LookSettings.grade = it }
-        slider(root, "HDR look", 0f, 1f, { LookSettings.hdr }) { LookSettings.hdr = it }
         slider(root, "Deep blacks", 0f, 1f, { LookSettings.blackPt }) { LookSettings.blackPt = it }
-        slider(root, "Glow", 0f, 1f, { LookSettings.glow }) { LookSettings.glow = it }
+        slider(root, "Specular glow / bloom", 0f, 1f, { LookSettings.glow }) { LookSettings.glow = it; updateBudget() }
         slider(root, "Vignette", 0f, 1f, { LookSettings.vignette }) { LookSettings.vignette = it }
-        slider(root, "Chromatic fringe", 0f, 1f, { LookSettings.chroma }) { LookSettings.chroma = it }
-        slider(root, "Motion blur", 0f, 0.6f, { LookSettings.motion }) { LookSettings.motion = it }
+        slider(root, "Sharpen (Look mode)", 0f, 1f, { LookSettings.sharpen }) { LookSettings.sharpen = it }
+        slider(root, "Clarity (Look mode)", 0f, 1f, { LookSettings.clarity }) { LookSettings.clarity = it }
+        slider(root, "Vibrance (Look mode)", 0f, 1f, { LookSettings.vibrance }) { LookSettings.vibrance = it }
+        slider(root, "Chromatic fringe (Look mode)", 0f, 1f, { LookSettings.chroma }) { LookSettings.chroma = it }
+        slider(root, "Motion blur (Look mode)", 0f, 0.6f, { LookSettings.motion }) { LookSettings.motion = it; updateBudget() }
 
+        updateBudget()
         setContentView(ScrollView(this).apply { addView(root) })
     }
 
@@ -203,6 +244,40 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         ui.removeCallbacks(statsTick)
         super.onPause()
+    }
+
+    private fun syncAllControls() {
+        (modeGroup?.getChildAt(LookSettings.mode) as? RadioButton)?.isChecked = true
+        (upscalerGroup?.getChildAt(LookSettings.upscaler) as? RadioButton)?.isChecked = true
+        captureHalfBox?.isChecked = LookSettings.captureHalf
+        lock120Box?.isChecked = LookSettings.target120Hz
+        bypassBox?.isChecked = LookSettings.bypass
+        refreshers.forEach { it() }
+        updateBudget()
+    }
+
+    private fun updateBudget() {
+        val est = Sd8Gen3Profile.estimate()
+        val label = if (est.safe120Hz) {
+            setBudgetColor(0xFF4ADE80.toInt())
+            String.format(
+                Locale.US,
+                "Adreno 750 @ 120Hz (8.33 ms window): est %.2f ms · SAFE 120 FPS (%.2f ms headroom)",
+                est.gpuMs, est.headroomMs,
+            )
+        } else {
+            setBudgetColor(0xFFFBBF24.toInt())
+            String.format(
+                Locale.US,
+                "Adreno 750 @ 120Hz: est %.2f ms (> 4.50 ms target) — tap SD 8 Gen 3 button for 120Hz lock",
+                est.gpuMs,
+            )
+        }
+        budgetView?.text = label
+    }
+
+    private fun setBudgetColor(color: Int) {
+        budgetView?.setTextColor(color)
     }
 
     private fun addAiSection(root: LinearLayout, pad: Int) {
@@ -217,8 +292,8 @@ class MainActivity : ComponentActivity() {
             setPadding(0, pad, 0, 0)
         })
         root.addView(TextView(this).apply {
-            text = "Pick the int8 planar 2x .tflite from AI Hub (.tflite or the .zip). Its input size must match the game's " +
-                "render size, for example 1168x540 for a game rendering at 1170x540. Then choose Neural or Auto above."
+            text = "Optional: int8 planar 2x .tflite from AI Hub matching game render size. " +
+                "For guaranteed 120fps in CoD Mobile, GPU GSR + HyperReal above is faster and sharper."
             textSize = 12f
         })
         root.addView(Button(this).apply {
@@ -237,7 +312,7 @@ class MainActivity : ComponentActivity() {
         root.addView(statsView)
     }
 
-    private fun radioGroup(parent: LinearLayout, labels: List<String>, selected: Int, onPick: (Int) -> Unit) {
+    private fun radioGroup(parent: LinearLayout, labels: List<String>, selected: Int, onPick: (Int) -> Unit): RadioGroup {
         val g = RadioGroup(this)
         labels.forEachIndexed { i, l ->
             g.addView(RadioButton(this).apply {
@@ -246,8 +321,12 @@ class MainActivity : ComponentActivity() {
                 isChecked = i == selected
             })
         }
-        g.setOnCheckedChangeListener { grp, id -> onPick(grp.indexOfChild(grp.findViewById(id))) }
+        g.setOnCheckedChangeListener { grp, id ->
+            val idx = grp.indexOfChild(grp.findViewById(id))
+            if (idx >= 0) onPick(idx)
+        }
         parent.addView(g)
+        return g
     }
 
     /** Accepts a .tflite or a .zip containing one. The file is kept in app storage so the choice survives restarts. */

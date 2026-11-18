@@ -13,11 +13,13 @@ import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.Gravity
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowManager
@@ -166,6 +168,15 @@ class CaptureService : Service() {
     private fun startPipeline(holder: SurfaceHolder) {
         val proj = projection ?: return
         try {
+            if (LookSettings.target120Hz && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                runCatching {
+                    holder.surface.setFrameRate(
+                        Sd8Gen3Profile.REFRESH_HZ,
+                        Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                        Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS,
+                    )
+                }
+            }
             val (w, h) = captureSize()
             val p = GlPipeline(holder.surface, w, h)
             p.start()
