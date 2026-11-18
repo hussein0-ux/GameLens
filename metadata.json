@@ -1,5 +1,0 @@
-{
-  "name": "GameLens",
-  "description": "Real-time WebGL2 post-processing, Qualcomm GSR / Catmull-Rom 2x upscaling, and HyperReal 3D LUT grading studio for gameplay capture.",
-  "requestFramePermissions": []
-}

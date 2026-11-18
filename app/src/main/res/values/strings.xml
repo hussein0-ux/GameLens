@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="a11y_description">Lets GameLens draw its enhanced picture over your game without blocking your taps. GameLens does not read your screen content or your input through this service.</string>
+</resources>
